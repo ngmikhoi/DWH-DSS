@@ -12,7 +12,7 @@ from datetime import datetime
 # Page configuration
 st.set_page_config(
     page_title="Market Region Clustering DSS",
-    page_icon="",
+    page_icon="🧩",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -480,6 +480,52 @@ def main():
         file_name="clustered_market_data.csv",
         mime="text/csv"
     )
+    
+    ft = """
+    <style>
+    a:link , a:visited{
+    color: #BFBFBF;  /* theme's text color hex code at 75 percent brightness*/
+    background-color: transparent;
+    text-decoration: none;
+    }
+
+    a:hover,  a:active {
+    color: #0283C3; /* theme's primary color*/
+    background-color: transparent;
+    text-decoration: underline;
+    }
+
+    #page-container {
+    position: relative;
+    min-height: 10vh;
+    }
+
+    footer{
+        visibility:hidden;
+    }
+
+    .footer {
+    position: relative;
+    left: 0;
+    top:230px;
+    bottom: 0;
+    width: 100%;
+    background-color: transparent;
+    color: #808080; /* theme's text color hex code at 50 percent brightness*/
+    text-align: left; /* you can replace 'left' with 'center' or 'right' if you want*/
+    }
+    </style>
+
+    <div id="page-container">
+
+    <div class="footer">
+    <p style='font-size: 0.875em;'>Made by <img src="https://em-content.zobj.net/source/skype/289/red-heart_2764-fe0f.png" alt="heart" height= "10"/><a style='display: inline; text-align: left;' href="https://github.com/ngmikhoi" target="_blank"> ngmikhoi</a></p>
+    </div>
+
+    </div>
+    """
+    st.write(ft, unsafe_allow_html=True)
+
 
 if __name__ == "__main__":
     main()
