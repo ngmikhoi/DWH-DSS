@@ -9,10 +9,54 @@ from sklearn.metrics import silhouette_score
 import io
 from datetime import datetime
 
+import snowflake.connector
+
+def get_snowflake_connection():
+    return snowflake.connector.connect(
+        user=st.secrets["snowflake_user"],
+        password=st.secrets["snowflake_password"],
+        account=st.secrets["snowflake_account"],
+        warehouse=st.secrets["snowflake_warehouse"],
+        database=st.secrets["snowflake_database"],
+        schema=st.secrets["snowflake_schema"],
+    )
+
+@st.cache_data(ttl=600)  # Cache for 10 minutes
+def load_data_from_snowflake():
+    conn = get_snowflake_connection()
+    cur = conn.cursor()
+    
+    cur.execute("""
+        SELECT
+            f.Revenue,
+            f.ProductQuantity,
+            d.ProductName,
+            t.CountryRegion,
+            dc.Gender,
+            f.DimTimeKey,
+            terr.latitude,
+            terr.longitude
+        FROM FACTSALE f
+        JOIN DIMPRODUCT d ON d.ProductSuggorateKey = f.BrdgProductSpecialOfferKey
+        JOIN DIMCUSTOMER dc ON dc.CustomerSuggorateKey = f.DimCustomerKey
+        JOIN DIMTERRITORY t ON t.TerritorySuggorateKey = f.DimTerritoryKey
+        LEFT JOIN (
+            SELECT DISTINCT 
+                TerritorySuggorateKey, 
+                10 + random() AS latitude, 
+                105 + random() AS longitude 
+            FROM DIMTERRITORY
+        ) terr ON terr.TerritorySuggorateKey = t.TerritorySuggorateKey
+    """)    
+
+    df = cur.fetch_pandas_all()
+    return df
+
+
 # Page configuration
 st.set_page_config(
     page_title="Market Region Clustering DSS",
-    page_icon="🧩",
+    page_icon="",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -121,28 +165,54 @@ def main():
     # Sidebar for user inputs
     st.sidebar.header('Settings')
     
-    # File upload
-    uploaded_file = st.sidebar.file_uploader(
-        "Upload your CSV file", 
-        type=['csv'],
-        help="Upload a CSV file with 'latitude' and 'longitude' columns"
-    )
+    # # File upload
+    # uploaded_file = st.sidebar.file_uploader(
+    #     "Upload your CSV file", 
+    #     type=['csv'],
+    #     help="Upload a CSV file with 'latitude' and 'longitude' columns"
+    # )
     
-    # Use sample data if no file uploaded
-    if uploaded_file is not None:
-        try:
+    # # Use sample data if no file uploaded
+    # if uploaded_file is not None:
+    #     try:
+    #         df = pd.read_csv(uploaded_file)
+    #         st.sidebar.success("File uploaded successfully!")
+    #     except Exception as e:
+    #         st.sidebar.error(f"Error reading file: {e}")
+    #         st.stop()
+    # else:
+    #     df = generate_sample_data()
+    #     st.sidebar.info("Using sample data. Upload a CSV file to use your own data.")
+
+    data_source = st.sidebar.radio(
+        "Select data source:",
+        ["Snowflake DWH", "Upload CSV", "Sample Data"]
+    )
+
+    if data_source == "Snowflake DWH":
+        st.sidebar.success("Loading data from Snowflake DWH…")
+        df = load_data_from_snowflake()
+
+    elif data_source == "Upload CSV":
+        uploaded_file = st.sidebar.file_uploader(
+            "Upload your CSV file", 
+            type=['csv']
+        )
+        if uploaded_file:
             df = pd.read_csv(uploaded_file)
-            st.sidebar.success("File uploaded successfully!")
-        except Exception as e:
-            st.sidebar.error(f"Error reading file: {e}")
+        else:
             st.stop()
-    else:
+
+    else:  # Sample Data
         df = generate_sample_data()
-        st.sidebar.info("Using sample data. Upload a CSV file to use your own data.")
+        st.sidebar.info("Using sample data.")
+
     
     # Display raw data
     with st.expander("View Raw Data"):
-        st.dataframe(df.head())
+        st.write(f"Total rows: {len(df):,}")
+        num_rows = st.slider("Number of rows to display", 5, min(100, len(df)), 20)
+        st.dataframe(df.head(num_rows), use_container_width=True)
     
     # Clustering parameters
     st.sidebar.subheader("Clustering Parameters")
@@ -240,62 +310,79 @@ def main():
             use_container_width=True
         )
     
-    # Create map visualization
-    st.subheader("Cluster Map")
+    # # Create map visualization
+    # st.subheader("Cluster Map")
     
-    # Check if we have geographical data
-    has_geo = 'latitude' in df.columns and 'longitude' in df.columns
+    # # Check if we have geographical data
+    # has_geo = 'latitude' in df.columns and 'longitude' in df.columns
     
-    if has_geo:
-        # Create scatter map
-        fig = px.scatter_mapbox(
+    # if has_geo:
+    #     # Create scatter map
+    #     fig = px.scatter_mapbox(
+    #         df,
+    #         lat='latitude',
+    #         lon='longitude',
+    #         color='cluster',
+    #         hover_name='city' if 'city' in df.columns else None,
+    #         hover_data=selected_features,
+    #         color_continuous_scale=px.colors.cyclical.IceFire,
+    #         zoom=5,
+    #         height=600,
+    #         title="Market Clusters"
+    #     )
+        
+    #     # Add cluster centers to the map
+    #     if 'center_latitude' in centers_df.columns and 'center_longitude' in centers_df.columns:
+    #         fig.add_scattermapbox(
+    #             lat=centers_df['center_latitude'],
+    #             lon=centers_df['center_longitude'],
+    #             mode='markers',
+    #             marker=dict(
+    #                 size=15,
+    #                 color='black',
+    #                 symbol='x'
+    #             ),
+    #             name='Cluster Centers',
+    #             showlegend=True
+    #         )
+        
+    #     fig.update_layout(
+    #         mapbox_style="open-street-map",
+    #         margin={"r":0, "t":30, "l":0, "b":0}
+    #     )
+        
+    #     st.plotly_chart(fig, use_container_width=True)
+    # else:
+    #     # If no geographical data, show 2D scatter plot
+    #     if len(selected_features) >= 2:
+    #         fig = px.scatter(
+    #             df,
+    #             x=selected_features[0],
+    #             y=selected_features[1],
+    #             color='cluster',
+    #             title=f"Cluster Visualization: {selected_features[0]} vs {selected_features[1]}",
+    #             hover_data=df.columns.tolist()
+    #         )
+    #         st.plotly_chart(fig, use_container_width=True)
+    #     else:
+    #         st.warning("Not enough features selected for visualization")
+
+    # Simple 2D scatter (no map)
+    st.subheader("Cluster Visualization")
+
+    if len(selected_features) >= 2:
+        fig = px.scatter(
             df,
-            lat='latitude',
-            lon='longitude',
+            x=selected_features[0],
+            y=selected_features[1],
             color='cluster',
-            hover_name='city' if 'city' in df.columns else None,
-            hover_data=selected_features,
-            color_continuous_scale=px.colors.cyclical.IceFire,
-            zoom=5,
-            height=600,
-            title="Market Clusters"
+            title=f"Cluster Visualization: {selected_features[0]} vs {selected_features[1]}",
+            hover_data=df.columns.tolist()
         )
-        
-        # Add cluster centers to the map
-        if 'center_latitude' in centers_df.columns and 'center_longitude' in centers_df.columns:
-            fig.add_scattermapbox(
-                lat=centers_df['center_latitude'],
-                lon=centers_df['center_longitude'],
-                mode='markers',
-                marker=dict(
-                    size=15,
-                    color='black',
-                    symbol='x'
-                ),
-                name='Cluster Centers',
-                showlegend=True
-            )
-        
-        fig.update_layout(
-            mapbox_style="open-street-map",
-            margin={"r":0, "t":30, "l":0, "b":0}
-        )
-        
         st.plotly_chart(fig, use_container_width=True)
     else:
-        # If no geographical data, show 2D scatter plot
-        if len(selected_features) >= 2:
-            fig = px.scatter(
-                df,
-                x=selected_features[0],
-                y=selected_features[1],
-                color='cluster',
-                title=f"Cluster Visualization: {selected_features[0]} vs {selected_features[1]}",
-                hover_data=df.columns.tolist()
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.warning("Not enough features selected for visualization")
+        st.warning("Not enough features selected for visualization")
+
     
     # Display cluster characteristics with enhanced visualization
     st.markdown("<h2 class='section-header'>📋 Cluster Characteristics</h2>", unsafe_allow_html=True)
@@ -480,52 +567,6 @@ def main():
         file_name="clustered_market_data.csv",
         mime="text/csv"
     )
-    
-    ft = """
-    <style>
-    a:link , a:visited{
-    color: #BFBFBF;  /* theme's text color hex code at 75 percent brightness*/
-    background-color: transparent;
-    text-decoration: none;
-    }
-
-    a:hover,  a:active {
-    color: #0283C3; /* theme's primary color*/
-    background-color: transparent;
-    text-decoration: underline;
-    }
-
-    #page-container {
-    position: relative;
-    min-height: 10vh;
-    }
-
-    footer{
-        visibility:hidden;
-    }
-
-    .footer {
-    position: relative;
-    left: 0;
-    top:230px;
-    bottom: 0;
-    width: 100%;
-    background-color: transparent;
-    color: #808080; /* theme's text color hex code at 50 percent brightness*/
-    text-align: left; /* you can replace 'left' with 'center' or 'right' if you want*/
-    }
-    </style>
-
-    <div id="page-container">
-
-    <div class="footer">
-    <p style='font-size: 0.875em;'>Made by <img src="https://em-content.zobj.net/source/skype/289/red-heart_2764-fe0f.png" alt="heart" height= "10"/><a style='display: inline; text-align: left;' href="https://github.com/ngmikhoi" target="_blank"> ngmikhoi</a></p>
-    </div>
-
-    </div>
-    """
-    st.write(ft, unsafe_allow_html=True)
-
 
 if __name__ == "__main__":
     main()
