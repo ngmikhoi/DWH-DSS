@@ -30,23 +30,37 @@ def load_data_from_snowflake():
         SELECT
             f.Revenue,
             f.ProductQuantity,
-            d.ProductName,
+            p.ProductName,
+            p.Subcategory,
+            p.Model,
+            p.ProductLine,
             t.CountryRegion,
             dc.Gender,
-            f.DimTimeKey,
-            terr.latitude,
-            terr.longitude
+            dc.LifeTimeValue,
+            dc.LoyaltyStatus,
+            dt.Year,
+            dt.Quarter,
+            dt.Month,
+            dt.Season
         FROM FACTSALE f
-        JOIN DIMPRODUCT d ON d.ProductSuggorateKey = f.BrdgProductSpecialOfferKey
-        JOIN DIMCUSTOMER dc ON dc.CustomerSuggorateKey = f.DimCustomerKey
-        JOIN DIMTERRITORY t ON t.TerritorySuggorateKey = f.DimTerritoryKey
-        LEFT JOIN (
-            SELECT DISTINCT 
-                TerritorySuggorateKey, 
-                10 + random() AS latitude, 
-                105 + random() AS longitude 
-            FROM DIMTERRITORY
-        ) terr ON terr.TerritorySuggorateKey = t.TerritorySuggorateKey
+        -- Join through bridge table (SCD Type 2 aware)
+        JOIN BRIDGEPRODUCTSPECIALOFFER b 
+            ON b.BrdgProductSpecialOfferKey = f.BrdgProductSpecialOfferKey
+            AND b.IsActive = TRUE  -- Only active bridge records
+        -- Join to product dimension (SCD Type 2 aware)
+        JOIN DIMPRODUCT p 
+            ON p.ProductSuggorateKey = b.ProductSuggorateKey
+            AND p.IsActive = TRUE  -- Only active product records
+        -- Join to customer dimension (SCD Type 2 aware)
+        JOIN DIMCUSTOMER dc 
+            ON dc.CustomerSuggorateKey = f.DimCustomerKey
+            AND dc.IsActive = TRUE  -- Only active customer records
+        -- Join to territory dimension (SCD Type 0 - no temporal tracking)
+        JOIN DIMTERRITORY t 
+            ON t.TerritorySuggorateKey = f.DimTerritoryKey
+        -- Join to time dimension using DateKey (YYYYMMDD format)
+        LEFT JOIN DIMTIME dt 
+            ON dt.DateKey = f.DimTimeKey
     """)    
 
     df = cur.fetch_pandas_all()

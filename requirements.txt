@@ -4,3 +4,6 @@ numpy>=1.21.0
 scikit-learn>=1.0.0
 plotly>=5.0.0
 snowflake-connector-python
+torch>=2.0.0
+matplotlib>=3.7.0
+seaborn>=0.12.0

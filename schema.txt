@@ -1,0 +1,114 @@
+Fact Table
+Name: FactSale
+Columns:
+BrdgProductSpecialOfferKey(FK)		Reference to BridgeProductSpecialOffer
+DimTerritoryKey(FK)				Reference to DimTerritory
+DimTimeKey(FK)				Reference to DimTime
+DimCustomerKey(FK)				Reference to DimCustomer
+(SalesOrderID + SalesOrderDetailID) (PK)	From Sales.SalesOrderDetail
+Revenue					From Sales.SalesOrderDetail.LineTotal
+ProductQuantity				From Sales.SalesOrderDetail.OrderQty
+ProductRange					Infered from Sales.SalesOrderDetail
+
+
+Name: FactMarketSegmentation
+Columns:
+DateKey (PK) 					Inferred from the analysis result
+MarketNameKey (PK)				Inferred from the analysis result
+SegmentID					Inferred from the analysis result  		
+Revenue 					Inferred from the analysis result
+Quantity					Inferred from the analysis result
+ProductRange					Inferred from the analysis result
+Dimension Table
+Bridge table name: BridgeProductSpecialOffer
+Columns:
+BrdgProductSpecialOfferKey (PK)		
+ProductSuggorateKey (FK)			Reference to DimProduct.ProductSuggorateKey
+SpecialOfferSuggorateKey (FK)		Reference to DimSpecialOffer.SpecialOfferSuggorateKey
+
+* Note for SCD: These information seems to be rarely changed if yes it is for correction purpose only → use SCD Type 1
+Name: DimProduct
+Columns:
+ProductSuggorateKey (PK)
+ProductName					From Production.Product.ProductName
+Subcategory					From Production.ProductModel.Name (1)
+Model						From Production.ProductSubcategory.Name (2)
+ProductLine					From Production.Product.ProductLine
+Class						From Production.Product.Class
+Style						From roduction.Product.Style
+ValidFrom					SCD Type 2
+ValidTo						SCD Type 2
+IsActive					SCD Type 2
+
+Production.Product.ModelID → Production.ProductionModel.Name
+Production.ProductSubcategoryID → Production.ProductSubcategory.Name
+* Note for SCD: These information seems to be rarely changed but the information from history is crucial → use SCD Type 2 
+
+Name: DimSpecialOffer
+Columns:
+SpecialOfferSuggorateKey (PK)
+SpecialOfferName				From Sales.SpecialOfferProduct.Description
+DiscountPct					From Sales.SpecialOffer.DiscountPct
+Type						From Sales.SpecialOffer.Type
+Category					From Sales.SpecialOffer.Category
+ValidFrom					SCD Type 2
+ValidTo						SCD Type 2
+IsActive					SCD Type 2
+
+* Note for SCD: These information seems to be rarely changed but the information from history is crucial → use SCD Type 2 
+Name: DimTerritory
+Columns:
+TerritorySuggorateKey (PK)
+Territory					From Sales.SalesTerritory.Name (1)
+CountryRegion				From Person.CountryRegion.Name (2)
+
+* Note for SCD: These information seems to be never changed → use SCD Type 0
+
+Person.StateProvince.TerritoryID → Sales.SalesTerritory.TerritoryID
+Person.StateProvince.CountryRegionCode → Person.CountryRegion.CountryRegionCode
+
+Name: DimTime
+Columns:
+TimeSuggorateKey (PK)
+Month					Inferred from Sales.SalesOrderHeader.OrderDate
+Quarter				Inferred from Sales.SalesOrderHeader.OrderDate
+Season				Inferred from Sales.SalesOrderHeader.OrderDate
+Year					Inferred from Sales.SalesOrderHeader.OrderDate
+
+* Note for SCD: These information seems to be never changed and it relates to the reliability and security of data → use SCD Type 0
+
+Name: DimCustomer
+Columns:
+CustomerSuggorateKey (PK)
+Gender				Inferred from Person.Person.Suffix
+LifeTimeValue				Inferred from Sales.SalesOrderDetail.LineTotal Group by Sales.SalesOrderHeader.CustomerID (1)
+LoyatyStatus				Inferred from Sales.SalesOrderHeader (2)
+
+LifeTimeValue = Total Revenue per Customer
+Then we classify the data according to their value. For example:
+Tier
+LTV
+Low
+0–100
+Medium
+100–300
+High
+300+
+
+This is just an example, you should base the rules on the real data
+LoyaltyStatus = orders in last 12 months∑​revenue
+Then we classify the data according to their value. For example:
+Status
+12-Month Revenue
+Platinum
+>= 2000
+Gold
+>= 1000
+Silver
+>= 500
+Bronze
+< 500
+
+This is just an example, you should base the rules on the real data
+
+* Note for SCD: These information seems to be occasionally changed → use SCD Type 2
