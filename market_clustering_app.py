@@ -410,16 +410,29 @@ def main():
             with st.expander(" Radar Chart Comparison", expanded=True):
                 fig = go.Figure()
                 
+                # scale each feature so its max maps to radius 1 (so each axis uses its own max)
+                max_vals = cluster_stats.max().values.astype(float)
+                tick_vals = [0, 0.25, 0.5, 0.75, 1.0]  # normalized ticks (0..1)
+                tick_text = ['0', '25%', '50%', '75%', '100%']  # percent representation of max value
+                
                 for cluster in cluster_stats.index:
+                    raw_vals = cluster_stats.loc[cluster].values.astype(float)
+                    normalized = raw_vals / max_vals  # map each feature to 0..1 where 1 == feature max
+                    # build hover text showing original values and feature max
+                    hovertext = [f"{feat}: {val:.2f} (max {mv:.2f})" for feat, val, mv in zip(selected_features, raw_vals, max_vals)]
                     fig.add_trace(go.Scatterpolar(
-                        r=cluster_stats.loc[cluster].values,
+                        r=normalized,
                         theta=selected_features,
                         fill='toself',
-                        name=f'Cluster {cluster}'
+                        name=f'Cluster {cluster}',
+                        hoverinfo='text',
+                        hovertext=hovertext
                     ))
                 
                 fig.update_layout(
-                    polar=dict(radialaxis=dict(visible=True)),
+                    polar=dict(
+                        radialaxis=dict(visible=True, range=[0,1], tickvals=tick_vals, ticktext=tick_text)
+                    ),
                     showlegend=True,
                     height=500
                 )
