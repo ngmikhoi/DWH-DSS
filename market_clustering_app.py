@@ -483,6 +483,86 @@ def main():
     else:
         st.warning("Not enough features selected for visualization")
 
+    # ------------------------- Cluster Map (by country) -------------------------
+    # Detect possible country columns
+    country_candidates = [c for c in df.columns if re.search(r"country|region|territory|nation|countryname", c, re.I)]
+    if country_candidates:
+        country_col = st.sidebar.selectbox("Country column for map (auto-detected)", options=country_candidates, index=0)
+        map_metric_opts = ["Counts", "Total revenue", "Dominant cluster"]
+        map_metric = st.sidebar.selectbox("Country map metric", options=map_metric_opts, index=0)
+
+        st.markdown("<h3>Cluster Map — by country</h3>", unsafe_allow_html=True)
+
+        # Build aggregated country x cluster table
+        agg = df.groupby([country_col, "cluster"]).agg(
+            count=("cluster", "size"),
+            revenue=("revenue", "sum") if "revenue" in df.columns else ("cluster", lambda s: 0)
+        ).reset_index()
+
+        if map_metric == "Counts":
+            country_summary = agg.groupby(country_col)["count"].sum().reset_index(name="value")
+            title = "Data point count per country"
+        elif map_metric == "Total revenue":
+            if "revenue" not in df.columns:
+                st.warning("No 'revenue' column detected — pick a different metric or upload revenue data.")
+                country_summary = agg.groupby(country_col)["count"].sum().reset_index(name="value")
+                title = "Data point count per country (revenue missing)"
+            else:
+                country_summary = agg.groupby(country_col)["revenue"].sum().reset_index(name="value")
+                title = "Total revenue per country"
+        else:  # Dominant cluster
+            dominant = agg.loc[agg.groupby(country_col)["count"].idxmax()].copy()
+            dominant["dominant_cluster"] = dominant["cluster"].astype(str)
+            country_summary = dominant[[country_col, "dominant_cluster"]]
+            title = "Dominant cluster by country"
+
+        try:
+            if map_metric != "Dominant cluster":
+                fig = px.choropleth(
+                    country_summary,
+                    locations=country_col,
+                    locationmode='country names',
+                    color='value',
+                    hover_name=country_col,
+                    title=title,
+                    color_continuous_scale=px.colors.sequential.Plasma
+                )
+            else:
+                fig = px.choropleth(
+                    country_summary,
+                    locations=country_col,
+                    locationmode='country names',
+                    color='dominant_cluster',
+                    hover_name=country_col,
+                    title=title,
+                    color_discrete_sequence=px.colors.qualitative.Safe
+                )
+            fig.update_layout(margin={"r":0,"t":30,"l":0,"b":0}, height=450)
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception:
+            st.warning("Choropleth map rendering failed (country names might not match plotly's country list). Falling back to bar chart.")
+            # fallback: bar chart
+            if map_metric != "Dominant cluster":
+                st.bar_chart(country_summary.sort_values('value', ascending=False).set_index(country_col)['value'])
+            else:
+                st.dataframe(country_summary)
+
+        # Stacked bar: cluster composition per country (top countries only for readability)
+        st.markdown("#### Cluster composition by country (top countries)")
+        top_countries = agg.groupby(country_col)["count"].sum().nlargest(12).index.tolist()
+        comp = agg[agg[country_col].isin(top_countries)].pivot(index=country_col, columns="cluster", values="count").fillna(0)
+        if not comp.empty:
+            comp = comp.reset_index()
+            fig2 = px.bar(comp, x=country_col, y=[c for c in comp.columns if c != country_col],
+                          title="Cluster counts (stacked) for top countries",
+                          labels={"value":"Count", country_col: "Country"})
+            st.plotly_chart(fig2, use_container_width=True)
+        else:
+            st.info("No cluster-country composition to show.")
+    else:
+        st.info("No country-like column found — add a Country / CountryRegion field to enable country map.")
+    # ------------------------- end Cluster Map -------------------------
+
     # Categorical (donut) charts + per-cluster breakdowns
     st.subheader("Categorical Distributions (Donut charts)")
     # Prefer requested fields if present; otherwise find low-cardinality object-like columns
@@ -695,12 +775,12 @@ def main():
     # Display summary table and charts
     col_a, col_b = st.columns([2, 1])
     with col_a:
-        st.markdown("### Cluster summary")
-        display_table = cluster_summary.copy()
-        # round numeric columns for readability
-        for c in display_table.select_dtypes(include=[np.number]).columns:
-            display_table[c] = display_table[c].round(3)
-        st.dataframe(display_table, use_container_width=True)
+        # st.markdown("### Cluster summary")
+        # display_table = cluster_summary.copy()
+        # # round numeric columns for readability
+        # for c in display_table.select_dtypes(include=[np.number]).columns:
+        #     display_table[c] = display_table[c].round(3)
+        # st.dataframe(display_table, use_container_width=True)
 
         # Priority chart
         fig_prior = px.bar(
