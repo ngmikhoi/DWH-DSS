@@ -7,9 +7,15 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import silhouette_score
 import io
+import zipfile
+import matplotlib.pyplot as plt
+from io import BytesIO
 from datetime import datetime
+import re
 
 import snowflake.connector
+import sys
+import subprocess
 
 def get_snowflake_connection():
     return snowflake.connector.connect(
@@ -348,9 +354,13 @@ def main():
     if 'revenue' in df.columns:
         cluster_revenue = df.groupby('cluster')['revenue'].sum().sort_index()
         avg_revenue = df.groupby('cluster')['revenue'].mean().sort_index()
+    # Customer counts: if there's a 'customers' column use it, otherwise treat each row as 1 customer
     if 'customers' in df.columns:
         cluster_customers = df.groupby('cluster')['customers'].sum().sort_index()
-        
+    else:
+        # number of rows per cluster = customers
+        cluster_customers = df.groupby('cluster').size().sort_index()
+
     # Create metrics in columns
     col1, col2, col3, col4 = st.columns(4)
     
@@ -377,7 +387,9 @@ def main():
             metrics_df['Avg. Revenue'] = avg_revenue.values.round(0).astype(int)
         if 'customers' in df.columns:
             metrics_df['Total Customers'] = cluster_customers.values
-            metrics_df['Revenue per Customer'] = (cluster_revenue / cluster_customers).round(0).astype(int)
+            metrics_df['Revenue per Customer'] = (cluster_revenue / cluster_customers.replace(0, np.nan)).round(0)
+            # convert to int when safe (keep NaN if no customers)
+            metrics_df['Revenue per Customer'] = metrics_df['Revenue per Customer'].fillna(0).astype(int)
         
         st.dataframe(
             metrics_df.style.background_gradient(cmap='YlGnBu', subset=['% of Total'])
@@ -623,154 +635,522 @@ def main():
                 use_container_width=True
             )
     
-    # Decision Support Section
-    st.markdown("<h2 class='section-header'>🎯 Decision Support & Recommendations</h2>", unsafe_allow_html=True)
-    
-    # Only show recommendations if we have the required data
-    if 'revenue' in df.columns and 'customers' in df.columns:
-        # Find high potential clusters
-        cluster_potential = (df.groupby('cluster')
-                           .agg({
-                               'revenue': 'sum',
-                               'customers': 'sum',
-                               'latitude': 'mean',
-                               'longitude': 'mean'
-                           })
-                           .sort_values('revenue', ascending=False))
-        
-        # High potential clusters (top 20% by revenue)
-        high_potential = cluster_potential[cluster_potential['revenue'] > 
-                                         cluster_potential['revenue'].quantile(0.8)]
-        
-        # Underperforming clusters (bottom 20% by revenue)
-        low_potential = cluster_potential[cluster_potential['revenue'] < 
-                                        cluster_potential['revenue'].quantile(0.2)]
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("<h3 style='color: #2e7d32;'>🚀 High Potential Clusters</h3>", unsafe_allow_html=True)
-            if not high_potential.empty:
-                for idx, row in high_potential.iterrows():
-                    with st.container():
-                        st.markdown(f"""
-                        <div class='recommendation-card'>
-                            <h4>Cluster {idx}</h4>
-                            <p>Revenue: ${row['revenue']:,.0f}</p>
-                            <p>Customers: {row['customers']:,.0f}</p>
-                            <p><strong>Recommendation:</strong> Consider increasing marketing budget and inventory in this area.</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-            else:
-                st.info("No high potential clusters identified in the top 20%.")
-        
-        with col2:
-            st.markdown("<h3 style='color: #d32f2f;'>⚠️ Underperforming Clusters</h3>", unsafe_allow_html=True)
-            if not low_potential.empty:
-                for idx, row in low_potential.iterrows():
-                    with st.container():
-                        st.markdown(f"""
-                        <div class='warning-card'>
-                            <h4>Cluster {idx}</h4>
-                            <p>Revenue: ${row['revenue']:,.0f}</p>
-                            <p>Customers: {row['customers']:,.0f}</p>
-                            <p><strong>Recommendation:</strong> Investigate reasons for low performance. Consider promotions or market research.</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-            else:
-                st.info("No underperforming clusters identified in the bottom 20%.")
-        
-        # Market expansion opportunities
-        st.markdown("<h3 style='color: #1565c0;'>🌐 Market Expansion Analysis</h3>", unsafe_allow_html=True)
-        st.markdown("""
-        <div class='metric-card'>
-            <h4>Geographic Coverage</h4>
-            <p>Your market coverage spans across {0} distinct regions. 
-            Based on the distribution of your high-performing clusters, 
-            we recommend exploring expansion in areas with similar demographic 
-            and economic characteristics.</p>
-        </div>
-        """.format(n_clusters), unsafe_allow_html=True)
-        
-        # Resource allocation strategy
-        st.markdown("<h3 style='color: #7b1fa2;'>📊 Resource Allocation Strategy</h3>", unsafe_allow_html=True)
-        st.markdown("""
-        <div class='metric-card'>
-            <h4>Optimal Resource Distribution</h4>
-            <p>Based on cluster analysis, consider the following allocation strategy:</p>
-            <ul>
-                <li><strong>High Potential Clusters:</strong> Allocate 50% of marketing budget</li>
-                <li><strong>Medium Potential Clusters:</strong> Allocate 35% of marketing budget</li>
-                <li><strong>Low Potential Clusters:</strong> Allocate 15% for maintenance and research</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Actionable insights
-        st.markdown("<h3 style='color: #ff8f00;'>💡 Actionable Insights</h3>", unsafe_allow_html=True)
-        insights = [
-            "Geographic clusters with high customer density show 30% higher revenue potential.",
-            "Consider implementing targeted promotions in underperforming clusters to boost sales.",
-            "The top 20% of clusters generate 60% of total revenue - focus on these high-value areas.",
-            "Seasonal trends show increased demand in urban clusters during Q4."
-        ]
-        
-        for insight in insights:
-            st.markdown(f"- {insight}")
-        
-        # Generate report button
-        if st.button("📄 Generate Detailed Market Analysis Report", 
-                    help="Click to generate a comprehensive PDF report with all analysis and recommendations"):
-            with st.spinner('Generating report...'):
-                # Simulate report generation
-                import time
-                time.sleep(2)
-                
-                # Create a simple report
-                current_date = datetime.now().strftime("%Y-%m-%d")
-                report = f"""
-                # Market Analysis Report
-                **Date:** {current_date}
-                
-                ## Executive Summary
-                This report provides an analysis of market segments and recommendations 
-                for strategic decision making.
-                
-                ## Key Findings
-                - Total clusters analyzed: {n_clusters}
-                - Total revenue across all clusters: ${df['revenue'].sum():,.0f}
-                - Average revenue per cluster: ${df['revenue'].mean():,.0f}
-                
-                ## Recommendations
-                1. Focus marketing efforts on high-potential clusters
-                2. Investigate underperforming clusters for improvement opportunities
-                3. Consider geographic expansion in areas with similar characteristics to top-performing clusters
-                """.format(date=current_date, 
-                          n_clusters=n_clusters)
-                
-                # Display report
-                st.download_button(
-                    label="📥 Download Report as PDF",
-                    data=report,
-                    file_name=f"market_analysis_report_{current_date}.md",
-                    mime="text/markdown"
-                )
-                st.success("Report generated successfully!")
+    # Insights and Decision Support / Recommendations
+    st.markdown("<h2 class='section-header'> Insights & Decision Support</h2>", unsafe_allow_html=True)
+
+    # Prepare base stats
+    cluster_summary = pd.DataFrame(index=range(n_clusters))
+    cluster_summary['size'] = df.groupby('cluster').size().reindex(range(n_clusters), fill_value=0)
+    if 'revenue' in df.columns:
+        cluster_summary['avg_revenue'] = df.groupby('cluster')['revenue'].mean().reindex(range(n_clusters), fill_value=0)
+        cluster_summary['total_revenue'] = df.groupby('cluster')['revenue'].sum().reindex(range(n_clusters), fill_value=0)
+    # customers: prefer explicit 'customers' column; otherwise use row-count as number of customers
+    if 'customers' in df.columns:
+        cluster_summary['avg_customers'] = df.groupby('cluster')['customers'].mean().reindex(range(n_clusters), fill_value=0)
+        cluster_summary['total_customers'] = df.groupby('cluster')['customers'].sum().reindex(range(n_clusters), fill_value=0)
     else:
-        st.warning("⚠️ Additional data (revenue, customers) would enable more detailed recommendations.")
-        st.info("For optimal results, ensure your dataset includes 'revenue' and 'customers' columns.")
+        cluster_summary['total_customers'] = df.groupby('cluster').size().reindex(range(n_clusters), fill_value=0)
+        # average per-cluster customers = total_customers (no per-customer breakdown available)
+        cluster_summary['avg_customers'] = cluster_summary['total_customers'].astype(float)
+
+    # compute revenue_per_customer from totals when totals exist (safe divide)
+    if 'total_revenue' in cluster_summary.columns and 'total_customers' in cluster_summary.columns:
+        cluster_summary['revenue_per_customer'] = cluster_summary.apply(
+            lambda r: (r['total_revenue'] / r['total_customers']),
+            axis=1
+        )
+    # Simple priority score: combine normalized size and revenue (if available)
+    # Safe normalization for size (avoid division by zero)
+    size_max = cluster_summary['size'].max() if (cluster_summary['size'].max() and not np.isnan(cluster_summary['size'].max())) else 1
+    size_norm = cluster_summary['size'] / size_max
     
-    # Download results
-    st.sidebar.subheader("Download Results")
+    # Compute revenue normalization only when total_revenue exists and has valid numbers
+    if 'total_revenue' in cluster_summary.columns and cluster_summary['total_revenue'].notna().any():
+        rev_max = cluster_summary['total_revenue'].max() if (cluster_summary['total_revenue'].max() and not np.isnan(cluster_summary['total_revenue'].max())) else 1
+        rev_norm = cluster_summary['total_revenue'] / rev_max
+        # combine size and revenue equally when revenue is present
+        cluster_summary['priority_score'] = 0.5 * size_norm + 0.5 * rev_norm
+    else:
+        # fallback: only size determines priority
+        cluster_summary['priority_score'] = size_norm
+
+    # Identify top numeric deviations per cluster vs dataset mean
+    numeric_feats = [c for c in selected_features if np.issubdtype(df[c].dtype, np.number)]
+    global_means = df[numeric_feats].mean() if numeric_feats else pd.Series(dtype=float)
+
+    top_diffs = {}
+    for i in range(n_clusters):
+        diffs = {}
+        for feat in numeric_feats:
+            center_val = cluster_centers_orig.loc[i, feat] if feat in cluster_centers_orig.columns else np.nan
+            diffs[feat] = (center_val - global_means.get(feat, 0))
+        # pick top absolute deviations
+        top = sorted(diffs.items(), key=lambda x: abs(x[1]) if not pd.isna(x[1]) else -1, reverse=True)[:4]
+        top_diffs[i] = top
+
+    # For categorical features, show the chosen representative value per cluster
+    cat_feats = [c for c in selected_features if c not in numeric_feats]
+    cat_representatives = cluster_centers_orig[cat_feats].copy() if cat_feats else pd.DataFrame()
+
+    # Display summary table and charts
+    col_a, col_b = st.columns([2, 1])
+    with col_a:
+        st.markdown("### Cluster summary")
+        display_table = cluster_summary.copy()
+        # round numeric columns for readability
+        for c in display_table.select_dtypes(include=[np.number]).columns:
+            display_table[c] = display_table[c].round(3)
+        st.dataframe(display_table, use_container_width=True)
+
+        # Priority chart
+        fig_prior = px.bar(
+            cluster_summary.reset_index().rename(columns={'index': 'cluster'}),
+            x='cluster',
+            y='priority_score',
+            title='Cluster priority score (higher = recommend investment)',
+            labels={'priority_score': 'Priority'}
+        )
+        st.plotly_chart(fig_prior, use_container_width=True)
+
+    with col_b:
+        # Top clusters by revenue per customer (if available)
+        if 'revenue_per_customer' in cluster_summary.columns:
+            st.markdown("### Revenue / Customer")
+            fig_rpc = px.bar(
+                cluster_summary.reset_index().rename(columns={'index': 'cluster'}),
+                x='cluster',
+                y='revenue_per_customer',
+                title='Avg revenue per customer by cluster',
+                labels={'revenue_per_customer': 'Revenue / Customer'}
+            )
+            st.plotly_chart(fig_rpc, use_container_width=True)
+        else:
+            st.info("Revenue/customers data not present — KPIs using these fields will be absent.")
+
+    # Produce plain-language recommendations per cluster
+    st.markdown("### Recommendations per cluster")
+    for i in range(n_clusters):
+        score = float(cluster_summary.loc[i, 'priority_score'])
+        size = int(cluster_summary.loc[i, 'size'])
+        recs = []
+        # base recommendations
+        if score >= 0.7:
+            recs.append("High priority for investment: consider expanding offers, targeted premium campaigns, and direct sales outreach.")
+        elif score >= 0.4:
+            recs.append("Medium priority: target with marketing campaigns and retention measures, test new offers.")
+        else:
+            recs.append("Low priority: monitor and keep supporting; focus on cost-effective engagement or automation.")
+        # revenue/customer suggestions
+        if 'revenue_per_customer' in cluster_summary.columns and not pd.isna(cluster_summary.loc[i, 'revenue_per_customer']):
+            rpc = cluster_summary.loc[i, 'revenue_per_customer']
+            if rpc >= cluster_summary['revenue_per_customer'].quantile(0.75):
+                recs.append("This segment has high revenue per customer — prioritize retention and upsell.")
+            elif rpc <= cluster_summary['revenue_per_customer'].quantile(0.25):
+                recs.append("Low revenue per customer — consider product re-bundling, pricing, or cross-sell.")
+        # behavior-based suggestions using numeric top deviations
+        deviations_text = ", ".join([f"{f} ({(d):+.2f})" for f, d in top_diffs.get(i, []) if f is not None])
+        if deviations_text:
+            recs.append(f"Distinct drivers: {deviations_text}")
+
+        # categorical highlights
+        cat_text = ""
+        if not cat_representatives.empty:
+            vals = cat_representatives.loc[i].dropna().to_dict()
+            if vals:
+                cat_text = ", ".join([f"{k}: {v}" for k, v in vals.items()])
+                recs.append(f"Top category indicators — {cat_text}")
+
+        # render card
+        with st.container():
+            st.markdown(f"<div class='recommendation-card'><b>Cluster {i}</b> — size {size}, priority {score:.2f}</div>", unsafe_allow_html=True)
+            for r in recs:
+                st.write("- " + r)
+
+    # High-level platform recommendations
+    st.markdown("### Actionable platform recommendations")
+    actions = []
+    # emphasize segments for effort
+    top_clusters = cluster_summary['priority_score'].sort_values(ascending=False).head(3).index.tolist()
+    actions.append(f"Focus acquisition and sales on clusters: {', '.join(map(str, top_clusters))}")
+    if 'total_revenue' in cluster_summary.columns:
+        best_rev_cluster = cluster_summary['total_revenue'].idxmax()
+        actions.append(f"Top revenue cluster: {best_rev_cluster} — design premium/retention programs.")
+    if cat_feats:
+        actions.append("Create targeted messaging for clusters using the dominant categorical features shown above.")
+    actions.append("A/B test 2–3 targeted offers for high-priority segments and measure conversion/CLTV.")
+    for a in actions:
+        st.markdown(f"- {a}")
+
+    # # ------------------------- Actionable Platform Recommendations -------------------------
+    # st.markdown("<h2 class='section-header'>🎯 Actionable Platform Recommendations</h2>", unsafe_allow_html=True)
+
+    # # Build a robust allocation and tactical suggestion per-cluster using cluster_summary KPIs
+    # cs = cluster_summary.copy()
+    # # Ensure priority_score exists
+    # if 'priority_score' not in cs.columns:
+    #     cs['priority_score'] = cs['size'] / cs['size'].max() if cs['size'].max() else 1.0
+
+    # # Normalize priority for allocation
+    # total_priority = cs['priority_score'].sum() if cs['priority_score'].sum() > 0 else 1.0
+    # cs['priority_weight'] = cs['priority_score'] / total_priority
+
+    # # Translate weights to recommended platform/marketing budget % (scale to e.g. 70% of flexible budget)
+    # FLEXIBLE_SHARE = 0.7  # 70% of flexible spend may be allocated by priority; remaining 30% for experiments/maintenance
+    # cs['recommended_pct_of_flexible_budget'] = (cs['priority_weight'] * 100 * FLEXIBLE_SHARE).round(1)
+    # cs['recommended_pct_of_total_budget'] = cs['recommended_pct_of_flexible_budget'] * 0.8  # example: flexible = 80% of total (tunable)
+
+    # # Classify cluster strategy based on size and revenue_per_customer
+    # def classify_cluster(row):
+    #     size = row.get('size', 0)
+    #     rpc = row.get('revenue_per_customer', np.nan)
+    #     # rules:
+    #     if not np.isnan(rpc):
+    #         if rpc >= cs['revenue_per_customer'].quantile(0.75):
+    #             if size / max(1, cs['size'].max()) < 0.25:
+    #                 return "Niche VIP — Retain & Upsell"
+    #             else:
+    #                 return "High-Value — Scale & Retain"
+    #         elif rpc <= cs['revenue_per_customer'].quantile(0.25):
+    #             if size / max(1, cs['size'].max()) > 0.4:
+    #                 return "Mass Low-Value — Efficiency & Acquisition"
+    #             else:
+    #                 return "Underperforming — Investigate & Test"
+    #     # fallback on size only
+    #     if size >= cs['size'].quantile(0.75):
+    #         return "Large — Growth & Monetize"
+    #     if size <= cs['size'].quantile(0.25):
+    #         return "Small — Test/Research"
+    #     return "Balanced"
+
+    # cs['strategy_bucket'] = cs.apply(classify_cluster, axis=1)
+
+    # # Suggest tactical playbook for each strategy bucket
+    # bucket_playbook = {
+    #     "Niche VIP — Retain & Upsell": [
+    #         "High-touch retention programs, personalized offers, loyalty incentives",
+    #         "Focus on Customer Success, NPS, and upsell automation",
+    #         "KPI: CLTV, retention rate, upsell conversion"
+    #     ],
+    #     "High-Value — Scale & Retain": [
+    #         "Increase acquisition spend selectively, keep retention offers",
+    #         "Run lookalike campaigns and premium bundles",
+    #         "KPI: CAC payback, ARPU, retention rate"
+    #     ],
+    #     "Mass Low-Value — Efficiency & Acquisition": [
+    #         "Optimize cost-per-acquisition, emphasize automation and self-serve",
+    #         "Use promotions to increase average order value, cross-sell at checkout",
+    #         "KPI: CAC, AOV, profit margin"
+    #     ],
+    #     "Underperforming — Investigate & Test": [
+    #         "Run small experiments to test product/price/message; collect qualitative feedback",
+    #         "Close monitoring and diagnostic analytics",
+    #         "KPI: lift in conversion, test success rate"
+    #     ],
+    #     "Large — Growth & Monetize": [
+    #         "Invest for scale, run regional expansion tests and channel diversification",
+    #         "Increase inventory and logistics readiness",
+    #         "KPI: incremental revenue, growth rate"
+    #     ],
+    #     "Small — Test/Research": [
+    #         "Use low-cost experiments and exploratory offers; gather data",
+    #         "Consider targeted surveys and observational research",
+    #         "KPI: experiment conversion, hypothesis validation"
+    #     ],
+    #     "Balanced": [
+    #         "Balanced mix of acquisition and retention; monitor KPIs and operate A/B tests",
+    #         "KPI: conversion rate, retention"
+    #     ]
+    # }
+
+    # # Produce summary table and a visual allocation chart
+    # cs_display = cs.reset_index().rename(columns={'index': 'cluster'})
+    # cs_display = cs_display[['cluster', 'size', 'total_revenue', 'avg_revenue', 'priority_score', 'recommended_pct_of_flexible_budget', 'strategy_bucket']].fillna('N/A')
+
+    # st.markdown("#### Recommended budget allocation (lens: priority score)")
+    # st.dataframe(cs_display.style.format({
+    #     'priority_score': '{:.3f}',
+    #     'recommended_pct_of_flexible_budget': '{:.1f}%'
+    # }), use_container_width=True)
+
+    # # Allocation chart
+    # fig_alloc = px.bar(
+    #     cs_base,  # use numeric-safe base for plotting
+    #     x='cluster',
+    #     y='recommended_pct_of_flexible_budget',
+    #     color='strategy_bucket',
+    #     title='Recommended % of Flexible Budget by Cluster',
+    #     labels={'recommended_pct_of_flexible_budget': '% of flexible budget'}
+    # )
+    # st.plotly_chart(fig_alloc, use_container_width=True)
+
+    # # Render actionable recommendations per cluster using the playbook
+    # st.markdown("### Cluster-level tactical recommendations (concise)")
+    # for idx, row in cs.iterrows():
+    #     bucket = row.get('strategy_bucket', 'Balanced')
+    #     plays = bucket_playbook.get(bucket, bucket_playbook['Balanced'])
+    #     pct = row.get('recommended_pct_of_flexible_budget', 0.0)
+    #     st.markdown(f"**Cluster {idx} — {bucket}** (recommended flexible budget ≈ {pct:.1f}%)")
+    #     for p in plays:
+    #         st.write("- " + p)
+
+    # # Recommended experiments and KPIs to run across clusters
+    # st.markdown("### Recommended experiments & KPIs")
+    # st.markdown("- Set up 2–3 priority experiments per top-priority cluster (A/B tests on price, bundling, message).")
+    # st.markdown("- Track KPIs by cluster: conversion rate, revenue per customer, retention rate, CAC, and CLTV.")
+    # st.markdown("- Re-evaluate cluster priorities quarterly and re-allocate flexible budget based on observed lift.")
+
+    # # optional: small suggestion on next steps
+    # st.info("Next steps: pick 1–2 clusters to test high-priority tactics this quarter. Monitor KPIs and iterate.")
+    # --------------------------------------------------------------------------------
+    # # ------------------------- Generate report (zip) -------------------------
+    # st.markdown("### Export / Generate report")
+    # st.write("Create a downloadable ZIP with cluster data, Excel workbook, plain-text summary, and a small chart.")
+    # 
+    # if st.button("Generate report"):
+    #     try:
+    #         # Build summary text
+    #         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    #         lines = []
+    #         lines.append(f"Market clustering report — generated {datetime.now().isoformat()}")
+    #         lines.append("")
+    #         lines.append("Cluster summary:")
+    #         lines.append(cluster_summary.to_string())
+    #         lines.append("")
+    #         lines.append("Top recommendations:")
+    #         for i in range(n_clusters):
+    #             score = float(cluster_summary.loc[i, 'priority_score'])
+    #             size = int(cluster_summary.loc[i, 'size'])
+    #             lines.append(f"- Cluster {i}: size={size}, priority={score:.3f}")
+    #         lines.append("")
+    #         lines.append("Action items:")
+    #         lines.extend(actions)
+    #         summary_text = "\n".join(lines)
+    # 
+    #         # Build Excel workbook in-memory
+    #         excel_buf = BytesIO()
+    #         with pd.ExcelWriter(excel_buf, engine='xlsxwriter') as writer:
+    #             try:
+    #                 df.to_excel(writer, sheet_name='clustered_data', index=False)
+    #             except Exception:
+    #                 # fallback to CSV write behavior — still try
+    #                 pass
+    #             if 'centers_orig' in locals() and centers_orig is not None:
+    #                 centers_orig.to_excel(writer, sheet_name='centers_orig', index=False)
+    #             if 'cluster_summary' in locals():
+    #                 cluster_summary.to_excel(writer, sheet_name='cluster_summary')
+    #             if 'cluster_centers_orig' in locals():
+    #                 cluster_centers_orig.to_excel(writer, sheet_name='cluster_centers_orig')
+    #             writer.save()
+    #         excel_bytes = excel_buf.getvalue()
+    # 
+    #         # CSV snapshot
+    #         csv_bytes = df.to_csv(index=False).encode('utf-8')
+    # 
+    #         # Small priority chart (matplotlib) into PNG
+    #         png_buf = BytesIO()
+    #         try:
+    #             fig, ax = plt.subplots(figsize=(6, 3))
+    #             cluster_summary['priority_score'].plot(kind='bar', ax=ax, color='C0')
+    #             ax.set_title('Cluster priority score')
+    #             ax.set_xlabel('Cluster')
+    #             ax.set_ylabel('Priority')
+    #             fig.tight_layout()
+    #             fig.savefig(png_buf, format='png', dpi=120)
+    #             plt.close(fig)
+    #             png_bytes = png_buf.getvalue()
+    #         except Exception:
+    #             png_bytes = b""
+    # 
+    #         # Create ZIP with files
+    #         zip_buf = BytesIO()
+    #         with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+    #             zf.writestr(f"clustered_data_{ts}.csv", csv_bytes)
+    #             zf.writestr(f"clustered_data_{ts}.xlsx", excel_bytes)
+    #             zf.writestr(f"summary_{ts}.txt", summary_text.encode('utf-8'))
+    #             if png_bytes:
+    #                 zf.writestr(f"priority_{ts}.png", png_bytes)
+    # 
+    #         zip_buf.seek(0)
+    # 
+    #         st.success("Report generated — click below to download")
+    #         st.download_button(
+    #             "Download report (ZIP)",
+    #             data=zip_buf.getvalue(),
+    #             file_name=f"market_clustering_report_{ts}.zip",
+    #             mime="application/zip"
+    #         )
+    #     except Exception as e:
+    #         st.error(f"Failed to generate report: {e}")
+    # -----------------------------------------------------------------------
+    # # Decision Support Section
+    # st.markdown("<h2 class='section-header'>🎯 Decision Support & Recommendations</h2>", unsafe_allow_html=True)
     
-    # Convert DataFrame to CSV for download
-    csv = df.to_csv(index=False).encode('utf-8')
-    st.sidebar.download_button(
-        label="Download Clustered Data",
-        data=csv,
-        file_name="clustered_market_data.csv",
-        mime="text/csv"
-    )
+    # # Only show recommendations if we have the required data
+    # if 'revenue' in df.columns and 'customers' in df.columns:
+    #     # Find high potential clusters
+    #     cluster_potential = (df.groupby('cluster')
+    #                        .agg({
+    #                            'revenue': 'sum',
+    #                            'customers': 'sum',
+    #                            'latitude': 'mean',
+    #                            'longitude': 'mean'
+    #                        })
+    #                        .sort_values('revenue', ascending=False))
+        
+    #     # High potential clusters (top 20% by revenue)
+    #     high_potential = cluster_potential[cluster_potential['revenue'] > 
+    #                                      cluster_potential['revenue'].quantile(0.8)]
+        
+    #     # Underperforming clusters (bottom 20% by revenue)
+    #     low_potential = cluster_potential[cluster_potential['revenue'] < 
+    #                                     cluster_potential['revenue'].quantile(0.2)]
+        
+    #     col1, col2 = st.columns(2)
+        
+    #     with col1:
+    #         st.markdown("<h3 style='color: #2e7d32;'>🚀 High Potential Clusters</h3>", unsafe_allow_html=True)
+    #         if not high_potential.empty:
+    #             for idx, row in high_potential.iterrows():
+    #                 with st.container():
+    #                     st.markdown(f"""
+    #                     <div class='recommendation-card'>
+    #                         <h4>Cluster {idx}</h4>
+    #                         <p>Revenue: ${row['revenue']:,.0f}</p>
+    #                         <p>Customers: {row['customers']:,.0f}</p>
+    #                         <p><strong>Recommendation:</strong> Consider increasing marketing budget and inventory in this area.</p>
+    #                     </div>
+    #                     """, unsafe_allow_html=True)
+    #         else:
+    #             st.info("No high potential clusters identified in the top 20%.")
+        
+    #     with col2:
+    #         st.markdown("<h3 style='color: #d32f2f;'>⚠️ Underperforming Clusters</h3>", unsafe_allow_html=True)
+    #         if not low_potential.empty:
+    #             for idx, row in low_potential.iterrows():
+    #                 with st.container():
+    #                     st.markdown(f"""
+    #                     <div class='warning-card'>
+    #                         <h4>Cluster {idx}</h4>
+    #                         <p>Revenue: ${row['revenue']:,.0f}</p>
+    #                         <p>Customers: {row['customers']:,.0f}</p>
+    #                         <p><strong>Recommendation:</strong> Investigate reasons for low performance. Consider promotions or market research.</p>
+    #                     </div>
+    #                     """, unsafe_allow_html=True)
+    #         else:
+    #             st.info("No underperforming clusters identified in the bottom 20%.")
+        
+    #     # Market expansion opportunities
+    #     st.markdown("<h3 style='color: #1565c0;'>🌐 Market Expansion Analysis</h3>", unsafe_allow_html=True)
+    #     st.markdown("""
+    #     <div class='metric-card'>
+    #         <h4>Geographic Coverage</h4>
+    #         <p>Your market coverage spans across {0} distinct regions. 
+    #         Based on the distribution of your high-performing clusters, 
+    #         we recommend exploring expansion in areas with similar demographic 
+    #         and economic characteristics.</p>
+    #     </div>
+    #     """.format(n_clusters), unsafe_allow_html=True)
+        
+    #     # Resource allocation strategy
+    #     st.markdown("<h3 style='color: #7b1fa2;'>📊 Resource Allocation Strategy</h3>", unsafe_allow_html=True)
+    #     st.markdown("""
+    #     <div class='metric-card'>
+    #         <h4>Optimal Resource Distribution</h4>
+    #         <p>Based on cluster analysis, consider the following allocation strategy:</p>
+    #         <ul>
+    #             <li><strong>High Potential Clusters:</strong> Allocate 50% of marketing budget</li>
+    #             <li><strong>Medium Potential Clusters:</strong> Allocate 35% of marketing budget</li>
+    #             <li><strong>Low Potential Clusters:</strong> Allocate 15% for maintenance and research</li>
+    #         </ul>
+    #     </div>
+    #     """, unsafe_allow_html=True)
+        
+    #     # Actionable insights
+    #     st.markdown("<h3 style='color: #ff8f00;'>💡 Actionable Insights</h3>", unsafe_allow_html=True)
+    #     insights = [
+    #         "Geographic clusters with high customer density show 30% higher revenue potential.",
+    #         "Consider implementing targeted promotions in underperforming clusters to boost sales.",
+    #         "The top 20% of clusters generate 60% of total revenue - focus on these high-value areas.",
+    #         "Seasonal trends show increased demand in urban clusters during Q4."
+    #     ]
+        
+    #     for insight in insights:
+    #         st.markdown(f"- {insight}")
+        
+    #     # Generate report button
+    #     if st.button("📄 Generate Detailed Market Analysis Report", 
+    #                 help="Click to generate a comprehensive PDF report with all analysis and recommendations"):
+    #         with st.spinner('Generating report...'):
+    #             # Simulate report generation
+    #             import time
+    #             time.sleep(2)
+                
+    #             # Create a simple report
+    #             current_date = datetime.now().strftime("%Y-%m-%d")
+    #             report = f"""
+    #             # Market Analysis Report
+    #             **Date:** {current_date}
+    #             
+    #             ## Executive Summary
+    #             This report provides an analysis of market segments and recommendations 
+    #             for strategic decision making.
+    #             
+    #             ## Key Findings
+    #             - Total clusters analyzed: {n_clusters}
+    #             - Total revenue across all clusters: ${df['revenue'].sum():,.0f}
+    #             - Average revenue per cluster: ${df['revenue'].mean():,.0f}
+    #             
+    #             ## Recommendations
+    #             1. Focus marketing efforts on high-potential clusters
+    #             2. Investigate underperforming clusters for improvement opportunities
+    #             3. Consider geographic expansion in areas with similar characteristics to top-performing clusters
+    #             """.format(date=current_date, 
+    #                       n_clusters=n_clusters)
+                
+    #             # Display report
+    #             st.download_button(
+    #                 label="📥 Download Report as PDF",
+    #                 data=report,
+    #                 file_name=f"market_analysis_report_{current_date}.md",
+    #                 mime="text/markdown"
+    #             )
+    #             st.success("Report generated successfully!")
+    # else:
+    #     st.warning("⚠️ Additional data (revenue, customers) would enable more detailed recommendations.")
+    #     st.info("For optimal results, ensure your dataset includes 'revenue' and 'customers' columns.")
+    
+    # # Download results
+    # st.sidebar.subheader("Download Results")
+    
+    # # Convert DataFrame to CSV for download
+    # csv = df.to_csv(index=False).encode('utf-8')
+    # st.sidebar.download_button(
+    #     label="Download Clustered Data",
+    #     data=csv,
+    #     file_name="clustered_market_data.csv",
+    #     mime="text/csv"
+    # )
+
+    # st.write("Columns:", df.columns.tolist())
+    # st.dataframe(df.dtypes)
+
+    # # auto-detect revenue-like columns
+    # revenue_candidates = [c for c in df.columns if re.search(r"revenue|sales|amount|total|price", c, re.I)]
+    # customers_candidates = [c for c in df.columns if re.search(r"customers?|customer_count|num_customers|qty|quantity", c, re.I)]
+
+    # revenue_col = st.sidebar.selectbox("Revenue column (if any)", options=[None] + revenue_candidates, index=0)
+    # customers_col = st.sidebar.selectbox("Customers column (if any)", options=[None] + customers_candidates, index=0)
+
+    # # coerce to numeric if chosen
+    # if revenue_col:
+    #     df[revenue_col] = pd.to_numeric(df[revenue_col], errors='coerce')
+    # # Use row-count as customers when not provided
+    # if customers_col:
+    #     df[customers_col] = pd.to_numeric(df[customers_col], errors='coerce')
+    # else:
+    #     # create a helper column for customers = 1 per row
+    #     df['_customer_row_count'] = 1
+    #     customers_col = '_customer_row_count'
 
 if __name__ == "__main__":
     main()
