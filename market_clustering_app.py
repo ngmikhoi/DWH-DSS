@@ -76,7 +76,7 @@ def load_data_from_snowflake():
 # Page configuration
 st.set_page_config(
     page_title="Market Region Clustering DSS",
-    page_icon="",
+    page_icon="🧩",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -253,7 +253,7 @@ def main():
         "Number of clusters", 
         min_value=2, 
         max_value=10, 
-        value=4,
+        value=6,
         help="Select the number of market segments to create"
     )
     
@@ -850,19 +850,71 @@ def main():
             recs.append(f"Distinct drivers: {deviations_text}")
 
         # categorical highlights
-        cat_text = ""
+        # build a nicer visual for top category indicators: badges + small deviation chart
+        cat_badge_html = ""
         if not cat_representatives.empty:
             vals = cat_representatives.loc[i].dropna().to_dict()
             if vals:
-                cat_text = ", ".join([f"{k}: {v}" for k, v in vals.items()])
-                recs.append(f"Top category indicators — {cat_text}")
+                badges = []
+                # compute percentage presence of the chosen category in this cluster
+                for feat, val in vals.items():
+                    try:
+                        pct = df.loc[df['cluster'] == i, feat].astype(str).value_counts(normalize=True).get(str(val), 0.0) * 100.0
+                    except Exception:
+                        pct = 0.0
+                    badges.append((feat, val, pct))
+
+                # create compact badge HTML
+                badge_html = ""
+                for feat, val, pct in badges:
+                    badge_html += (
+                        f"<span style='display:inline-block;margin:4px 6px;padding:6px 10px;"
+                        f"border-radius:14px;background:#f4f9f4;color:#0b3d25;border:1px solid rgba(0,0,0,0.06);"
+                        f"font-size:0.9rem;'>"
+                        f"<b style=\"margin-right:6px\">{feat}</b>"
+                        f"<span style='opacity:0.95'>{val}</span>"
+                        f"<small style='margin-left:8px;opacity:0.65'>({pct:.0f}%)</small>"
+                        f"</span>"
+                    )
+                cat_badge_html = f"<div style='margin-top:8px'>{badge_html}</div>"
+
+                # add a short textual marker so the same info is included in the recommendations list
+                recs.append("Category indicators (visual below)")
+            else:
+                cat_badge_html = ""
+        else:
+            cat_badge_html = ""
 
         # render card
         with st.container():
             st.markdown(f"<div class='recommendation-card'><b>Cluster {i}</b> — size {size}, priority {score:.2f}</div>", unsafe_allow_html=True)
             for r in recs:
                 st.write("- " + r)
+            # render badges for top categories (HTML) if present
+            if cat_badge_html:
+                st.markdown(cat_badge_html, unsafe_allow_html=True)
 
+            # show small horizontal bar chart for top numeric deviations (if any)
+            diffs = top_diffs.get(i, [])
+            if diffs:
+                # build a small DataFrame for plotting
+                import pandas as _pd  # local import to avoid top-of-file changes
+                df_d = _pd.DataFrame(diffs, columns=['feature', 'diff']).dropna()
+                if not df_d.empty:
+                    df_d['color'] = df_d['diff'].apply(lambda x: 'pos' if x >= 0 else 'neg')
+                    # Keep bars short and unobtrusive
+                    fig_dev = px.bar(
+                        df_d.sort_values('diff'),
+                        x='diff',
+                        y='feature',
+                        orientation='h',
+                        color='color',
+                        color_discrete_map={'pos': '#2e7d32', 'neg': '#d32f2f'},
+                        title="Top numeric deviations vs global mean",
+                        labels={'diff': 'Deviation'}
+                    )
+                    fig_dev.update_layout(showlegend=False, height=220, margin=dict(l=60, r=10, t=30, b=10))
+                    st.plotly_chart(fig_dev, use_container_width=True)
     # High-level platform recommendations
     st.markdown("### Actionable platform recommendations")
     actions = []
@@ -877,6 +929,51 @@ def main():
     actions.append("A/B test 2–3 targeted offers for high-priority segments and measure conversion/CLTV.")
     for a in actions:
         st.markdown(f"- {a}")
+        
+    ft = """
+    <style>
+    a:link , a:visited{
+    color: #BFBFBF;  /* theme's text color hex code at 75 percent brightness*/
+    background-color: transparent;
+    text-decoration: none;
+    }
+
+    a:hover,  a:active {
+    color: #0283C3; /* theme's primary color*/
+    background-color: transparent;
+    text-decoration: underline;
+    }
+
+    #page-container {
+    position: relative;
+    min-height: 10vh;
+    }
+
+    footer{
+        visibility:hidden;
+    }
+
+    .footer {
+    position: relative;
+    left: 0;
+    top:230px;
+    bottom: 0;
+    width: 100%;
+    background-color: transparent;
+    color: #808080; /* theme's text color hex code at 50 percent brightness*/
+    text-align: left; /* you can replace 'left' with 'center' or 'right' if you want*/
+    }
+    </style>
+
+    <div id="page-container">
+
+    <div class="footer">
+    <p style='font-size: 0.875em;'>Made by <img src="https://em-content.zobj.net/source/skype/289/red-heart_2764-fe0f.png" alt="heart" height= "10"/><a style='display: inline; text-align: left;' href="https://github.com/ngmikhoi" target="_blank"> ngmikhoi</a></p>
+    </div>
+
+    </div>
+    """
+    st.write(ft, unsafe_allow_html=True)
 
     # # ------------------------- Actionable Platform Recommendations -------------------------
     # st.markdown("<h2 class='section-header'>🎯 Actionable Platform Recommendations</h2>", unsafe_allow_html=True)
