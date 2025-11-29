@@ -244,7 +244,7 @@ def main():
     default_features = all_cols.copy()
     
     selected_features = st.sidebar.multiselect(
-        "Select features for clustering (you may include categorical/string columns)",
+        "Select features for clustering",
         options=all_cols,
         default=default_features,
         help="Select columns to use for clustering; categorical/string columns will be one-hot encoded automatically"
@@ -296,6 +296,49 @@ def main():
         centers_orig['cluster'] = range(n_clusters)
     else:
         centers_orig = None
+
+    # Build a DataFrame of cluster centers expressed for each original selected feature.
+    # - Numeric features: use the center value directly.
+    # - Categorical features: pick the most representative category from the encoded dummy center values
+    cluster_centers_orig = pd.DataFrame(index=range(n_clusters))
+    for feat in selected_features:
+        if feat in centers_full.columns:
+            # numeric original feature present directly in encoded space
+            cluster_centers_orig[feat] = centers_full[feat].values
+        else:
+            # categorical feature: find columns in encoded space that belong to this feature
+            encoded_cols_for_feat = [c for c in centers_full.columns if c.startswith(f"{feat}_")]
+            if encoded_cols_for_feat:
+                # categories as seen in original DF (preserve observed order)
+                cats = list(pd.Series(df[feat].astype(str).unique()))
+                # suffix names for encoded columns
+                encoded_suffixes = [c.split(f"{feat}_", 1)[1] for c in encoded_cols_for_feat]
+
+                # For each cluster, pick category with maximum implied score.
+                picks = []
+                for i in range(n_clusters):
+                    scores = {}
+                    sum_dummies = 0.0
+                    for col in encoded_cols_for_feat:
+                        catname = col.split(f"{feat}_", 1)[1]
+                        val = centers_full.loc[i, col]
+                        scores[catname] = float(val)
+                        sum_dummies += float(val)
+                    # find dropped category (if any)
+                    dropped = [c for c in cats if c not in encoded_suffixes]
+                    if dropped:
+                        # Implied dropped-category score = 1 - sum(other dummy mean values)
+                        implied = 1.0 - sum_dummies
+                        scores[dropped[0]] = float(implied)
+                    # choose top category (ties broken arbitrarily)
+                    pick = max(scores.items(), key=lambda x: x[1])[0]
+                    picks.append(pick)
+                cluster_centers_orig[feat] = picks
+            else:
+                # feature missing from encoded space (unexpected) — fill with NaN
+                cluster_centers_orig[feat] = [np.nan] * n_clusters
+
+    cluster_centers_orig.index.name = 'cluster'
     
     # Display cluster statistics with enhanced metrics
     st.markdown("<h2 class='section-header'> Cluster Analysis</h2>", unsafe_allow_html=True)
@@ -551,37 +594,30 @@ def main():
                  st.plotly_chart(fig, use_container_width=True)
         
         # Show detailed statistics
-        with st.expander("📋 Detailed Cluster Statistics", expanded=False):
-            # Avoid overwhelming UI when many encoded features exist:
-            stats = cluster_stats.copy()
+        with st.expander("📋 Detailed Cluster Center Statistics", expanded=True):
+            # Display original-feature cluster centers (numeric centers + representative categories)
+            stats = cluster_centers_orig.copy()
             
             # Ensure index is 'cluster' for display
             if stats.index.name != 'cluster':
                 stats = stats.reset_index().set_index('cluster', drop=False)
             
-            # Limit displayed columns by variance to a reasonable number, but allow user to opt-in to view all
+            # When many features exist, show first N (preserving original selected_features order)
             MAX_DISPLAY = 12
-            numeric_cols = stats.select_dtypes(include=[np.number]).columns.tolist()
-            display_cols = stats.columns.tolist()
-            if len(display_cols) > MAX_DISPLAY:
-                if numeric_cols:
-                    # pick top numeric cols by variance
-                    top_numeric = stats[numeric_cols].var().sort_values(ascending=False).head(MAX_DISPLAY).index.tolist()
-                    display_cols = top_numeric
-                else:
-                    display_cols = display_cols[:MAX_DISPLAY]
-            
-            show_all = st.checkbox("Show all features in detailed stats", value=False)
-            if show_all:
-                display_cols = stats.columns.tolist()
-            
+            all_cols = stats.columns.tolist()
+
+
+           
+            # default to the first MAX_DISPLAY columns so both numeric + categorical appear
+            display_cols = all_cols[:MAX_DISPLAY]
+
             display_df = stats.loc[:, display_cols].copy()
-            
+
             # Round numeric values for readability
             for c in display_df.select_dtypes(include=[np.number]).columns:
                 display_df[c] = display_df[c].round(3)
             
-            # Use pandas Styler but ensure unique columns/index and keep display small
+            # Show the table with light gradient on numeric columns
             st.dataframe(
                 display_df.style.background_gradient(cmap='YlOrRd'),
                 use_container_width=True
