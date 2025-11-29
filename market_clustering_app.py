@@ -238,18 +238,16 @@ def main():
         help="Select the number of market segments to create"
     )
     
-    # Select features for clustering
-    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    if 'latitude' in numeric_cols and 'longitude' in numeric_cols:
-        default_features = ['latitude', 'longitude']
-    else:
-        default_features = numeric_cols[:2] if len(numeric_cols) >= 2 else numeric_cols
+    # Select features for clustering (allow strings/categoricals + numeric)
+    all_cols = df.columns.tolist()
+    # select all columns by default
+    default_features = all_cols.copy()
     
     selected_features = st.sidebar.multiselect(
-        "Select features for clustering",
-        options=numeric_cols,
+        "Select features for clustering (you may include categorical/string columns)",
+        options=all_cols,
         default=default_features,
-        help="Select numerical features to use for clustering"
+        help="Select columns to use for clustering; categorical/string columns will be one-hot encoded automatically"
     )
     
     if len(selected_features) < 2:
@@ -259,21 +257,45 @@ def main():
     # Prepare data for clustering
     X = df[selected_features].copy()
     
-    # Standardize features
+    # Identify numeric features among selected for use in charts/summary
+    numeric_selected = [c for c in selected_features if np.issubdtype(df[c].dtype, np.number)]
+    cat_selected = [c for c in selected_features if c not in numeric_selected]
+    
+    # Fill missing for categorical and numeric before encoding
+    if cat_selected:
+        X[cat_selected] = X[cat_selected].fillna("__UNKNOWN__").astype(str)
+    if numeric_selected:
+        X[numeric_selected] = X[numeric_selected].fillna(0)
+    
+    # One-hot encode categorical features (drop_first to avoid collinearity)
+    X_encoded = pd.get_dummies(X, columns=cat_selected, drop_first=True)
+    
+    # Standardize features used for clustering
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    X_scaled = scaler.fit_transform(X_encoded)
     
     # Perform K-means clustering
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
     df['cluster'] = kmeans.fit_predict(X_scaled)
     
-    # Calculate cluster centers in original scale
-    cluster_centers = scaler.inverse_transform(kmeans.cluster_centers_)
-    centers_df = pd.DataFrame(
-        cluster_centers, 
-        columns=[f'center_{col}' for col in selected_features]
+    # Calculate cluster centers (inverse transform back to original feature space)
+    centers_full = pd.DataFrame(
+        scaler.inverse_transform(kmeans.cluster_centers_),
+        columns=X_encoded.columns
     )
+    # Full center table (encoded-space columns) with 'center_' prefix
+    centers_df = centers_full.add_prefix('center_')
     centers_df['cluster'] = range(n_clusters)
+    
+    # Also expose centers for original selected features (if present in encoded columns),
+    # this keeps compatibility with any downstream code that expects e.g. 'center_latitude'
+    orig_center_cols = [c for c in selected_features if c in centers_full.columns]
+    if orig_center_cols:
+        centers_orig = centers_full[orig_center_cols].copy()
+        centers_orig.columns = [f'center_{c}' for c in orig_center_cols]
+        centers_orig['cluster'] = range(n_clusters)
+    else:
+        centers_orig = None
     
     # Display cluster statistics with enhanced metrics
     st.markdown("<h2 class='section-header'> Cluster Analysis</h2>", unsafe_allow_html=True)
@@ -384,65 +406,184 @@ def main():
     # Simple 2D scatter (no map)
     st.subheader("Cluster Visualization")
 
-    if len(selected_features) >= 2:
+    # choose two numeric columns for plotting; prefer original numeric_selected, else use encoded columns
+    plot_x, plot_y = None, None
+    if len(numeric_selected) >= 2:
+        plot_x, plot_y = numeric_selected[0], numeric_selected[1]
+    else:
+        encoded_cols = X_encoded.columns.tolist()
+        if len(encoded_cols) >= 2:
+            plot_x, plot_y = encoded_cols[0], encoded_cols[1]
+
+    if plot_x and plot_y:
         fig = px.scatter(
-            df,
-            x=selected_features[0],
-            y=selected_features[1],
+            df if plot_x in df.columns and plot_y in df.columns else X_encoded.assign(cluster=df['cluster']),
+            x=plot_x,
+            y=plot_y,
             color='cluster',
-            title=f"Cluster Visualization: {selected_features[0]} vs {selected_features[1]}",
+            title=f"Cluster Visualization: {plot_x} vs {plot_y}",
             hover_data=df.columns.tolist()
         )
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.warning("Not enough features selected for visualization")
 
+    # Categorical (donut) charts + per-cluster breakdowns
+    st.subheader("Categorical Distributions (Donut charts)")
+    # Prefer requested fields if present; otherwise find low-cardinality object-like columns
+    requested = ['Gender', 'gender', 'CountryRegion', 'Country', 'Model', 'model', 'ProductLine', 'Subcategory', 'city']
+    available = [c for c in requested if c in df.columns]
+    # auto-detect additional categorical columns with small cardinality
+    auto_cats = [c for c in df.select_dtypes(include=['object', 'category']).columns if c not in available and df[c].nunique() <= 12]
+    display_cats = available + auto_cats
+
+    if display_cats:
+        for cat in display_cats:
+            # keep top categories to avoid enormously crowded pies
+            top_n = 10
+            freq = df[cat].value_counts().nlargest(top_n)
+            top_values = freq.index.tolist()
+            df_cat = df.copy()
+            df_cat[cat] = df_cat[cat].where(df_cat[cat].isin(top_values), other='Other')
+
+            col_a, col_b = st.columns(2)
+            with col_a:
+                fig1 = px.pie(
+                    df_cat,
+                    names=cat,
+                    hole=0.45,
+                    title=f"{cat} — Overall distribution (top {top_n})",
+                    color_discrete_sequence=px.colors.qualitative.Safe
+                )
+                fig1.update_traces(textinfo='percent+label')
+                st.plotly_chart(fig1, use_container_width=True)
+
+            with col_b:
+                # per-cluster breakdown (grouped bar) for readability
+                grp = df_cat.groupby(['cluster', cat]).size().reset_index(name='count')
+                fig2 = px.bar(
+                    grp,
+                    x=cat,
+                    y='count',
+                    color='cluster',
+                    barmode='group',
+                    title=f"{cat} — Count by cluster (top {top_n})",
+                )
+                fig2.update_layout(xaxis={'categoryorder': 'total descending'})
+                st.plotly_chart(fig2, use_container_width=True)
+    else:
+        st.info("No suitable categorical columns found for donut charts (look for Gender/Country/Model or low-cardinality text columns).")
     
     # Display cluster characteristics with enhanced visualization
     st.markdown("<h2 class='section-header'>📋 Cluster Characteristics</h2>", unsafe_allow_html=True)
     
     if len(selected_features) > 0:
-        # Calculate mean values for each cluster
-        cluster_stats = df.groupby('cluster')[selected_features].mean()
+        # Compute encoded summaries (always available since we used X_encoded for clustering)
+        encoded_cols = X_encoded.columns.tolist()
+        encoded_stats = X_encoded.groupby(df['cluster']).mean()
+        
+        # Prefer numeric summaries if available; also keep encoded stats so radar/plots can pick encoded features as fallback.
+        if len(numeric_selected) >= 1:
+            numeric_stats = df.groupby('cluster')[numeric_selected].mean()
+            # combine numeric and encoded stats so later visualizations can access either set
+            cluster_stats = pd.concat([numeric_stats, encoded_stats], axis=1)
+        else:
+            # fallback to encoded columns: pick up to 6 encoded features for charting
+            chosen = encoded_cols[:6]
+            cluster_stats = encoded_stats.loc[:, chosen]
+        
+        # Make sure column names and index are unique for pandas Styler (avoids KeyError)
+        if cluster_stats.columns.duplicated().any():
+            seen = {}
+            new_cols = []
+            for c in cluster_stats.columns:
+                seen[c] = seen.get(c, 0) + 1
+                new_cols.append(c if seen[c] == 1 else f"{c}__dup{seen[c]-1}")
+            cluster_stats.columns = new_cols
+
+        if not cluster_stats.index.is_unique:
+            cluster_stats = cluster_stats.reset_index()
+            if 'cluster' in cluster_stats.columns:
+                cluster_stats = cluster_stats.set_index('cluster')
+            else:
+                cluster_stats.index = pd.Index(range(len(cluster_stats)), name='idx')
         
         # Add radar chart for cluster comparison
-        if len(selected_features) >= 3:  # Radar chart needs at least 3 features
-            with st.expander(" Radar Chart Comparison", expanded=True):
-                fig = go.Figure()
-                
+        # Radar needs at least 3 numeric features; prefer original numeric_selected, else use encoded columns
+        radar_features = None
+        if len(numeric_selected) >= 3:
+            radar_features = numeric_selected
+        else:
+            # try to pick 3+ encoded columns from X_encoded
+            if len(X_encoded.columns) >= 3:
+                radar_features = X_encoded.columns.tolist()[:min(6, len(X_encoded.columns))]
+
+        if radar_features and len(radar_features) >= 3:
+             with st.expander(" Radar Chart Comparison", expanded=True):
+                 fig = go.Figure()
+                 
                 # scale each feature so its max maps to radius 1 (so each axis uses its own max)
-                max_vals = cluster_stats.max().values.astype(float)
-                tick_vals = [0, 0.25, 0.5, 0.75, 1.0]  # normalized ticks (0..1)
-                tick_text = ['0', '25%', '50%', '75%', '100%']  # percent representation of max value
-                
-                for cluster in cluster_stats.index:
-                    raw_vals = cluster_stats.loc[cluster].values.astype(float)
-                    normalized = raw_vals / max_vals  # map each feature to 0..1 where 1 == feature max
-                    # build hover text showing original values and feature max
-                    hovertext = [f"{feat}: {val:.2f} (max {mv:.2f})" for feat, val, mv in zip(selected_features, raw_vals, max_vals)]
-                    fig.add_trace(go.Scatterpolar(
-                        r=normalized,
-                        theta=selected_features,
-                        fill='toself',
-                        name=f'Cluster {cluster}',
-                        hoverinfo='text',
-                        hovertext=hovertext
-                    ))
-                
-                fig.update_layout(
-                    polar=dict(
-                        radialaxis=dict(visible=True, range=[0,1], tickvals=tick_vals, ticktext=tick_text)
-                    ),
-                    showlegend=True,
-                    height=500
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                 max_vals = cluster_stats[radar_features].max().values.astype(float)
+                 tick_vals = [0, 0.25, 0.5, 0.75, 1.0]  # normalized ticks (0..1)
+                 tick_text = ['0', '25%', '50%', '75%', '100%']  # percent representation of max value
+                 
+                 for cluster in cluster_stats.index:
+                     raw_vals = cluster_stats.loc[cluster, radar_features].values.astype(float)
+                     normalized = raw_vals / max_vals  # map each feature to 0..1 where 1 == feature max
+                     # build hover text showing original values and feature max
+                     hovertext = [f"{feat}: {val:.2f} (max {mv:.2f})" for feat, val, mv in zip(radar_features, raw_vals, max_vals)]
+                     fig.add_trace(go.Scatterpolar(
+                         r=normalized,
+                         theta=radar_features,
+                         fill='toself',
+                         name=f'Cluster {cluster}',
+                         hoverinfo='text',
+                         hovertext=hovertext
+                     ))
+                 
+                 fig.update_layout(
+                     polar=dict(
+                         radialaxis=dict(visible=True, range=[0,1], tickvals=tick_vals, ticktext=tick_text)
+                     ),
+                     showlegend=True,
+                     height=500
+                 )
+                 st.plotly_chart(fig, use_container_width=True)
         
         # Show detailed statistics
         with st.expander("📋 Detailed Cluster Statistics", expanded=False):
+            # Avoid overwhelming UI when many encoded features exist:
+            stats = cluster_stats.copy()
+            
+            # Ensure index is 'cluster' for display
+            if stats.index.name != 'cluster':
+                stats = stats.reset_index().set_index('cluster', drop=False)
+            
+            # Limit displayed columns by variance to a reasonable number, but allow user to opt-in to view all
+            MAX_DISPLAY = 12
+            numeric_cols = stats.select_dtypes(include=[np.number]).columns.tolist()
+            display_cols = stats.columns.tolist()
+            if len(display_cols) > MAX_DISPLAY:
+                if numeric_cols:
+                    # pick top numeric cols by variance
+                    top_numeric = stats[numeric_cols].var().sort_values(ascending=False).head(MAX_DISPLAY).index.tolist()
+                    display_cols = top_numeric
+                else:
+                    display_cols = display_cols[:MAX_DISPLAY]
+            
+            show_all = st.checkbox("Show all features in detailed stats", value=False)
+            if show_all:
+                display_cols = stats.columns.tolist()
+            
+            display_df = stats.loc[:, display_cols].copy()
+            
+            # Round numeric values for readability
+            for c in display_df.select_dtypes(include=[np.number]).columns:
+                display_df[c] = display_df[c].round(3)
+            
+            # Use pandas Styler but ensure unique columns/index and keep display small
             st.dataframe(
-                cluster_stats.style.background_gradient(cmap='YlOrRd')
-                .format('{:.2f}'),
+                display_df.style.background_gradient(cmap='YlOrRd'),
                 use_container_width=True
             )
     
