@@ -306,7 +306,23 @@ def main():
         default=default_features,
         help="Select columns to use for clustering; categorical/string columns will be one-hot encoded automatically"
     )
+
+    # Automatically drop constant / single-valued features (e.g. Year when only 2014 is present)
+    if selected_features:
+        single_valued = [c for c in selected_features if df[c].nunique(dropna=False) <= 1]
+        if single_valued:
+            st.sidebar.info(f"Removed constant features from clustering (no variance): {', '.join(single_valued)}")
+            selected_features = [c for c in selected_features if c not in single_valued]
     
+    # If the user selected a time column that is low-cardinality (e.g., 'Year' with 1 value),
+    # auto-remove it as well — avoid clustering on a column that gives no separation.
+    if selected_features:
+        low_card_time = [c for c in selected_features if re.search(r'year|month|day|date|time', c, re.I) and df[c].nunique() <= 2]
+        if low_card_time:
+            # remove only if very low-cardinality to avoid surprising removals
+            st.sidebar.info(f"Removed low-cardinality time features from clustering: {', '.join(low_card_time)}")
+            selected_features = [c for c in selected_features if c not in low_card_time]
+
     if len(selected_features) < 2:
         st.warning("Please select at least 2 features for clustering")
         st.stop()
