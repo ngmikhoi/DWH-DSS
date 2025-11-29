@@ -190,6 +190,44 @@ def find_column_case_insensitive(df, name):
             return c
     return None
 
+def pretty_label(col_name: str) -> str:
+    """Return a human-friendly label for a feature/column name."""
+    if col_name is None:
+        return ""
+    s = str(col_name)
+    # common explicit mappings
+    mapping = {
+        'revenue': 'Revenue (USD)',
+        'customers': 'Customers (count)',
+        'total_revenue': 'Total Revenue (USD)',
+        'avg_revenue': 'Avg. Revenue (USD)',
+        'total_customers': 'Total Customers',
+        'avg_customers': 'Avg. Customers',
+        'productquantity': 'Product Quantity',
+        'product_quantity': 'Product Quantity',
+        'avg_product_qty': 'Avg Product Qty',
+        'life_time_value': 'Lifetime Value',
+        'lifetimevalue': 'Lifetime Value',
+        'avg_ltv': 'Avg Lifetime Value',
+        'loyalty': 'Loyalty',
+        'loyalty_score': 'Loyalty Score',
+        'latitude': 'Latitude',
+        'longitude': 'Longitude',
+        'city': 'City',
+        'cluster': 'Cluster',
+        'priority_score': 'Priority Score',
+        'revenue_per_customer': 'Revenue / Customer (USD)',
+    }
+    if s in mapping:
+        return mapping[s]
+    key = s.strip()
+    # normalize keys (strip, lower, remove spaces/underscores)
+    k = re.sub(r'[\s_]+', '', key).lower()
+    # fallback: split snake_case / camelCase to words and title-case
+    # add spaces between camelCase boundaries
+    spaced = re.sub(r'(?<!^)(?=[A-Z])', ' ', key).replace('_', ' ').replace('-', ' ')
+    return spaced.strip().title()
+
 # Main function
 def main():
     # Sidebar for user inputs
@@ -373,6 +411,21 @@ def main():
     else:
         # number of rows per cluster = customers
         cluster_customers = df.groupby('cluster').size().sort_index()
+
+    # --- Ensure a lightweight cluster_summary exists early so visualizations (radar, etc.) can use it
+    # This prevents UnboundLocalError when later code references cluster_summary before it's rebuilt.
+    cluster_summary = pd.DataFrame(index=range(n_clusters))
+    cluster_summary['size'] = cluster_sizes.reindex(range(n_clusters), fill_value=0)
+    if revenue_col is not None:
+        cluster_summary['total_revenue'] = cluster_revenue.reindex(range(n_clusters), fill_value=0)
+        cluster_summary['avg_revenue'] = avg_revenue.reindex(range(n_clusters), fill_value=0)
+    if customers_col is not None:
+        cluster_summary['total_customers'] = cluster_customers.reindex(range(n_clusters), fill_value=0)
+        cluster_summary['avg_customers'] = df.groupby('cluster')[customers_col].mean().reindex(range(n_clusters), fill_value=0)
+    else:
+        cluster_summary['total_customers'] = cluster_customers.reindex(range(n_clusters), fill_value=0)
+        cluster_summary['avg_customers'] = cluster_summary['total_customers'].astype(float)
+    # --- end early cluster_summary
 
     # Create metrics in columns
     col1, col2, col3, col4 = st.columns(4)
@@ -604,7 +657,7 @@ def main():
                     df_cat,
                     names=cat,
                     hole=0.45,
-                    title=f"{cat} — Overall distribution (top {top_n})",
+                    title=f"{cat} — Overall distribution",
                     color_discrete_sequence=px.colors.qualitative.Safe
                 )
                 fig1.update_traces(textinfo='percent+label')
@@ -619,7 +672,7 @@ def main():
                     y='count',
                     color='cluster',
                     barmode='group',
-                    title=f"{cat} — Count by cluster (top {top_n})",
+                    title=f"{cat} — Count by cluster",
                 )
                 fig2.update_layout(xaxis={'categoryorder': 'total descending'})
                 st.plotly_chart(fig2, use_container_width=True)
@@ -661,46 +714,78 @@ def main():
                 cluster_stats.index = pd.Index(range(len(cluster_stats)), name='idx')
         
         # Add radar chart for cluster comparison
-        # Radar needs at least 3 numeric features; prefer original numeric_selected, else use encoded columns
-        radar_features = None
-        if len(numeric_selected) >= 3:
-            radar_features = numeric_selected
-        else:
-            # try to pick 3+ encoded columns from X_encoded
-            if len(X_encoded.columns) >= 3:
-                radar_features = X_encoded.columns.tolist()[:min(6, len(X_encoded.columns))]
+        # Radar chart — prefer these five metrics when available:
+        # total_customers, total_revenue, product quantity, lifetime value, loyalty status (scored)
+        product_qty_col = find_column_case_insensitive(df, "productquantity") or find_column_case_insensitive(df, "product_quantity")
+        ltv_col = find_column_case_insensitive(df, "lifetimevalue") or find_column_case_insensitive(df, "life_time_value") or find_column_case_insensitive(df, "lifeTimeValue")
+        loyalty_col = find_column_case_insensitive(df, "loyaltystatus") or find_column_case_insensitive(df, "loyalty_status") or find_column_case_insensitive(df, "loyalty")
 
-        if radar_features and len(radar_features) >= 3:
-             with st.expander(" Radar Chart Comparison", expanded=True):
-                 fig = go.Figure()
-                 
-                # scale each feature so its max maps to radius 1 (so each axis uses its own max)
-                 max_vals = cluster_stats[radar_features].max().values.astype(float)
-                 tick_vals = [0, 0.25, 0.5, 0.75, 1.0]  # normalized ticks (0..1)
-                 tick_text = ['0', '25%', '50%', '75%', '100%']  # percent representation of max value
-                 
-                 for cluster in cluster_stats.index:
-                     raw_vals = cluster_stats.loc[cluster, radar_features].values.astype(float)
-                     normalized = raw_vals / max_vals  # map each feature to 0..1 where 1 == feature max
-                     # build hover text showing original values and feature max
-                     hovertext = [f"{feat}: {val:.2f} (max {mv:.2f})" for feat, val, mv in zip(radar_features, raw_vals, max_vals)]
-                     fig.add_trace(go.Scatterpolar(
-                         r=normalized,
-                         theta=radar_features,
-                         fill='toself',
-                         name=f'Cluster {cluster}',
-                         hoverinfo='text',
-                         hovertext=hovertext
-                     ))
-                 
-                 fig.update_layout(
-                     polar=dict(
-                         radialaxis=dict(visible=True, range=[0,1], tickvals=tick_vals, ticktext=tick_text)
-                     ),
-                     showlegend=True,
-                     height=500
-                 )
-                 st.plotly_chart(fig, use_container_width=True)
+        radar_df = pd.DataFrame(index=range(n_clusters))
+        # total customers (prefer explicit, fallback to cluster size)
+        if 'total_customers' in cluster_summary.columns:
+            radar_df['total_customers'] = cluster_summary['total_customers'].astype(float)
+        else:
+            radar_df['total_customers'] = cluster_summary['size'].astype(float)
+
+        # total revenue (0 if not available)
+        radar_df['total_revenue'] = cluster_summary['total_revenue'].astype(float) if 'total_revenue' in cluster_summary.columns else 0.0
+
+        # product quantity (mean per cluster when available)
+        if product_qty_col and product_qty_col in df.columns:
+            radar_df['avg_product_qty'] = df.groupby('cluster')[product_qty_col].mean().reindex(range(n_clusters), fill_value=0.0).astype(float)
+
+        # lifetime value (mean per cluster)
+        if ltv_col and ltv_col in df.columns:
+            radar_df['avg_ltv'] = pd.to_numeric(df[ltv_col], errors='coerce').groupby(df['cluster']).mean().reindex(range(n_clusters), fill_value=0.0).astype(float)
+
+        # loyalty status -> numeric score (try to rank categories by revenue if revenue exists, else by counts)
+        if loyalty_col and loyalty_col in df.columns:
+            # compute category ranking
+            if revenue_col is not None:
+                metric_by_cat = df.groupby(loyalty_col)[revenue_col].sum().sort_values(ascending=False)
+            else:
+                metric_by_cat = df.groupby(loyalty_col).size().sort_values(ascending=False)
+            cats = metric_by_cat.index.tolist()
+            if len(cats) > 0:
+                # map top category -> 1.0, bottom -> 0.0 (linear)
+                ranks = pd.Series(np.linspace(1.0, 0.0, num=len(cats)), index=cats)
+                df['_loyalty_score_tmp'] = df[loyalty_col].astype(str).map(ranks).fillna(0.0).astype(float)
+                radar_df['loyalty_score'] = df.groupby('cluster')['_loyalty_score_tmp'].mean().reindex(range(n_clusters), fill_value=0.0).astype(float)
+                df.drop(columns=['_loyalty_score_tmp'], inplace=True, errors='ignore')
+
+        # choose at least three radar axes — prefer the requested five when present
+        radar_features = [c for c in ['total_customers', 'total_revenue', 'avg_product_qty', 'avg_ltv', 'loyalty_score'] if c in radar_df.columns]
+
+        # fallback to previously computed cluster_stats if fewer than 3 requested metrics available
+        if len(radar_features) < 3:
+            fallback = [c for c in (cluster_stats.columns.tolist()) if np.issubdtype(cluster_stats[c].dtype, np.number)]
+            radar_features = (radar_features + fallback)[:max(0, min(len(fallback), 6))]
+        
+        if len(radar_features) >= 3:
+            with st.expander(" Radar Chart Comparison", expanded=True):
+                fig = go.Figure()
+                max_vals = radar_df[radar_features].max().replace(0, 1).values.astype(float)
+                tick_vals = [0, 0.25, 0.5, 0.75, 1.0]
+                tick_text = ['0', '25%', '50%', '75%', '100%']
+                display_labels = [pretty_label(c) for c in radar_features]
+                for cluster in radar_df.index:
+                    raw_vals = radar_df.loc[cluster, radar_features].values.astype(float)
+                    normalized = raw_vals / max_vals
+                    hovertext = [f"{feat}: {val:.2f} (max {mv:.2f})" for feat, val, mv in zip(radar_features, raw_vals, max_vals)]
+                    fig.add_trace(go.Scatterpolar(
+                        r=normalized,
+                        theta=display_labels,
+                        fill='toself',
+                        name=f'Cluster {cluster}',
+                        hoverinfo='text',
+                        hovertext=hovertext
+                    ))
+                fig.update_layout(
+                    polar=dict(radialaxis=dict(visible=True, range=[0, 1], tickvals=tick_vals, ticktext=tick_text)),
+                    showlegend=True,
+                    height=500
+                )
+                st.plotly_chart(fig, use_container_width=True)
         
         # Show detailed statistics
         with st.expander("📋 Detailed Cluster Center Statistics", expanded=True):
@@ -879,7 +964,7 @@ def main():
                 cat_badge_html = f"<div style='margin-top:8px'>{badge_html}</div>"
 
                 # add a short textual marker so the same info is included in the recommendations list
-                recs.append("Category indicators (visual below)")
+                recs.append("Category indicators")
             else:
                 cat_badge_html = ""
         else:
@@ -896,25 +981,25 @@ def main():
 
             # show small horizontal bar chart for top numeric deviations (if any)
             diffs = top_diffs.get(i, [])
-            if diffs:
-                # build a small DataFrame for plotting
-                import pandas as _pd  # local import to avoid top-of-file changes
-                df_d = _pd.DataFrame(diffs, columns=['feature', 'diff']).dropna()
-                if not df_d.empty:
-                    df_d['color'] = df_d['diff'].apply(lambda x: 'pos' if x >= 0 else 'neg')
-                    # Keep bars short and unobtrusive
-                    fig_dev = px.bar(
-                        df_d.sort_values('diff'),
-                        x='diff',
-                        y='feature',
-                        orientation='h',
-                        color='color',
-                        color_discrete_map={'pos': '#2e7d32', 'neg': '#d32f2f'},
-                        title="Top numeric deviations vs global mean",
-                        labels={'diff': 'Deviation'}
-                    )
-                    fig_dev.update_layout(showlegend=False, height=220, margin=dict(l=60, r=10, t=30, b=10))
-                    st.plotly_chart(fig_dev, use_container_width=True)
+            # if diffs:
+            #     # build a small DataFrame for plotting
+            #     import pandas as _pd  # local import to avoid top-of-file changes
+            #     df_d = _pd.DataFrame(diffs, columns=['feature', 'diff']).dropna()
+            #     if not df_d.empty:
+            #         df_d['color'] = df_d['diff'].apply(lambda x: 'pos' if x >= 0 else 'neg')
+            #         # Keep bars short and unobtrusive
+            #         fig_dev = px.bar(
+            #             df_d.sort_values('diff'),
+            #             x='diff',
+            #             y='feature',
+            #             orientation='h',
+            #             color='color',
+            #             color_discrete_map={'pos': '#2e7d32', 'neg': '#d32f2f'},
+            #             title="Top numeric deviations vs global mean",
+            #             labels={'diff': 'Deviation'}
+            #         )
+            #         fig_dev.update_layout(showlegend=False, height=220, margin=dict(l=60, r=10, t=30, b=10))
+            #         st.plotly_chart(fig_dev, use_container_width=True)
     # High-level platform recommendations
     st.markdown("### Actionable platform recommendations")
     actions = []
