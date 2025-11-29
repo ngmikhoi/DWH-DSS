@@ -180,6 +180,16 @@ def generate_sample_data():
     
     return pd.concat(data, ignore_index=True)
 
+# Function to find column by name case-insensitively
+def find_column_case_insensitive(df, name):
+    """Return actual column name from df matching 'name' case-insensitively, or None."""
+    if df is None:
+        return None
+    for c in df.columns:
+        if str(c).strip().lower() == str(name).strip().lower():
+            return c
+    return None
+
 # Main function
 def main():
     # Sidebar for user inputs
@@ -227,7 +237,10 @@ def main():
         df = generate_sample_data()
         st.sidebar.info("Using sample data.")
 
-    
+    # detect revenue/customers columns case-insensitively so code works with different schemas
+    revenue_col = find_column_case_insensitive(df, "revenue")
+    customers_col = find_column_case_insensitive(df, "customers")
+
     # Display raw data
     with st.expander("View Raw Data"):
         st.write(f"Total rows: {len(df):,}")
@@ -351,12 +364,12 @@ def main():
     
     # Calculate additional metrics
     cluster_sizes = df['cluster'].value_counts().sort_index()
-    if 'revenue' in df.columns:
-        cluster_revenue = df.groupby('cluster')['revenue'].sum().sort_index()
-        avg_revenue = df.groupby('cluster')['revenue'].mean().sort_index()
+    if revenue_col is not None:
+        cluster_revenue = df.groupby('cluster')[revenue_col].sum().sort_index()
+        avg_revenue = df.groupby('cluster')[revenue_col].mean().sort_index()
     # Customer counts: if there's a 'customers' column use it, otherwise treat each row as 1 customer
-    if 'customers' in df.columns:
-        cluster_customers = df.groupby('cluster')['customers'].sum().sort_index()
+    if customers_col is not None:
+        cluster_customers = df.groupby('cluster')[customers_col].sum().sort_index()
     else:
         # number of rows per cluster = customers
         cluster_customers = df.groupby('cluster').size().sort_index()
@@ -371,8 +384,8 @@ def main():
     with col3:
         st.metric("Avg. Points/Cluster", f"{len(df)/n_clusters:.1f}")
     with col4:
-        if 'revenue' in df.columns:
-            st.metric("Total Revenue", f"${df['revenue'].sum():,.0f}")
+        if revenue_col is not None:
+            st.metric("Total Revenue", f"${df[revenue_col].sum():,.0f}")
     
     # Cluster details in expandable section
     with st.expander("📈 Detailed Cluster Metrics", expanded=True):
@@ -382,10 +395,10 @@ def main():
             '% of Total': (cluster_sizes.values / len(df) * 100).round(1)
         })
         
-        if 'revenue' in df.columns:
+        if revenue_col is not None:
             metrics_df['Total Revenue'] = cluster_revenue.values.round(0).astype(int)
             metrics_df['Avg. Revenue'] = avg_revenue.values.round(0).astype(int)
-        if 'customers' in df.columns:
+        if customers_col is not None:
             metrics_df['Total Customers'] = cluster_customers.values
             metrics_df['Revenue per Customer'] = (cluster_revenue / cluster_customers.replace(0, np.nan)).round(0)
             # convert to int when safe (keep NaN if no customers)
@@ -494,16 +507,20 @@ def main():
         st.markdown("<h3>Cluster Map — by country</h3>", unsafe_allow_html=True)
 
         # Build aggregated country x cluster table
-        agg = df.groupby([country_col, "cluster"]).agg(
-            count=("cluster", "size"),
-            revenue=("revenue", "sum") if "revenue" in df.columns else ("cluster", lambda s: 0)
-        ).reset_index()
+        # aggregate country x cluster table (use case-insensitive revenue column if available)
+        agg_ops = {"count": ("cluster", "size")}
+        if revenue_col is not None:
+            agg_ops["revenue"] = (revenue_col, "sum")
+        else:
+            # create a zero revenue column for consistent shape
+            agg_ops["revenue"] = ("cluster", lambda s: 0)
+        agg = df.groupby([country_col, "cluster"]).agg(**agg_ops).reset_index()
 
         if map_metric == "Counts":
             country_summary = agg.groupby(country_col)["count"].sum().reset_index(name="value")
             title = "Data point count per country"
         elif map_metric == "Total revenue":
-            if "revenue" not in df.columns:
+            if revenue_col is None:
                 st.warning("No 'revenue' column detected — pick a different metric or upload revenue data.")
                 country_summary = agg.groupby(country_col)["count"].sum().reset_index(name="value")
                 title = "Data point count per country (revenue missing)"
@@ -721,11 +738,11 @@ def main():
     # Prepare base stats
     cluster_summary = pd.DataFrame(index=range(n_clusters))
     cluster_summary['size'] = df.groupby('cluster').size().reindex(range(n_clusters), fill_value=0)
-    if 'revenue' in df.columns:
-        cluster_summary['avg_revenue'] = df.groupby('cluster')['revenue'].mean().reindex(range(n_clusters), fill_value=0)
-        cluster_summary['total_revenue'] = df.groupby('cluster')['revenue'].sum().reindex(range(n_clusters), fill_value=0)
+    if revenue_col is not None:
+        cluster_summary['avg_revenue'] = df.groupby('cluster')[revenue_col].mean().reindex(range(n_clusters), fill_value=0)
+        cluster_summary['total_revenue'] = df.groupby('cluster')[revenue_col].sum().reindex(range(n_clusters), fill_value=0)
     # customers: prefer explicit 'customers' column; otherwise use row-count as number of customers
-    if 'customers' in df.columns:
+    if customers_col is not None:
         cluster_summary['avg_customers'] = df.groupby('cluster')['customers'].mean().reindex(range(n_clusters), fill_value=0)
         cluster_summary['total_customers'] = df.groupby('cluster')['customers'].sum().reindex(range(n_clusters), fill_value=0)
     else:
@@ -852,7 +869,7 @@ def main():
     # emphasize segments for effort
     top_clusters = cluster_summary['priority_score'].sort_values(ascending=False).head(3).index.tolist()
     actions.append(f"Focus acquisition and sales on clusters: {', '.join(map(str, top_clusters))}")
-    if 'total_revenue' in cluster_summary.columns:
+    if revenue_col is not None:
         best_rev_cluster = cluster_summary['total_revenue'].idxmax()
         actions.append(f"Top revenue cluster: {best_rev_cluster} — design premium/retention programs.")
     if cat_feats:
