@@ -123,6 +123,18 @@ This project implements a complete data warehouse and decision support system fo
     *   **Configuration**: Set target segments, training epochs, batch size, and device (CPU/GPU).
     *   **Execution**: Trigger the "Dynamic Monthly Segmentation" process.
     *   **Monitoring**: View real-time logs and progress of the segmentation run.
+   
+3.  **🛝 Playground (Ad-hoc Analysis)**:
+    *   **Role**: Interactive sandbox for data scientists to experiment with raw data without affecting the official pipeline.
+    *   **Data Source**: Direct connection to `FactSale` and Dimension tables (bypassing the LSTM pipeline).
+    *   **Features**:
+        *   **Raw Data Loading**: Fetch sample data directly from Snowflake.
+        *   **Feature Selection**: Manually select columns (Revenue, Quantity, Discount, etc.) for clustering.
+        *   **Interactive Clustering**: Run K-Means on-the-fly with adjustable $K$.
+        *   **Visualizations**:
+            *   PCA Projection (2D/3D) of raw features.
+            *   Correlation Heatmaps.
+            *   Elbow Method / Silhouette Analysis.
 
 ### Database Schema Files
 
