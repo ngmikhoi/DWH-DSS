@@ -115,10 +115,10 @@ class MarketSegmentationPipeline:
         query = f"""
         WITH MonthlyMarketData AS (
             SELECT
-                t.CountryRegion AS Market,
+                CONCAT(t.Territory_ID, ' - ', t.CountryRegion) AS Market,
                 dt.Year,
                 dt.Month,
-                dt.DateKey,
+                MAX(dt.DateKey) AS DateKey,  -- Representative date for the month
                 SUM(f.Revenue) AS Revenue,
                 SUM(f.ProductQuantity) AS Quantity,
                 COUNT(DISTINCT f.SalesOrderID) AS OrderCount,
@@ -126,7 +126,23 @@ class MarketSegmentationPipeline:
                 AVG(f.Revenue) AS AvgOrderValue,
                 -- Product diversity metrics
                 COUNT(DISTINCT p.Subcategory) AS UniqueSubcategories,
-                COUNT(DISTINCT p.ProductLine) AS UniqueProductLines
+                COUNT(DISTINCT p.ProductLine) AS UniqueProductLines,
+                -- Dynamic features (SCD Type 2) - now time-series
+                AVG(so.DiscountPct) AS AvgDiscount,
+                -- Customer loyalty distribution (changes over time)
+                SUM(CASE WHEN c.LoyaltyStatus = 'Platinum' THEN 1 ELSE 0 END) * 1.0 / 
+                    NULLIF(COUNT(DISTINCT f.DimCustomerKey), 0) AS PlatinumShare,
+                SUM(CASE WHEN c.LoyaltyStatus = 'Gold' THEN 1 ELSE 0 END) * 1.0 / 
+                    NULLIF(COUNT(DISTINCT f.DimCustomerKey), 0) AS GoldShare,
+                SUM(CASE WHEN c.LoyaltyStatus = 'Silver' THEN 1 ELSE 0 END) * 1.0 / 
+                    NULLIF(COUNT(DISTINCT f.DimCustomerKey), 0) AS SilverShare,
+                -- Average LTV (evolves as customers buy more)
+                AVG(CASE 
+                    WHEN c.LifeTimeValue = 'High' THEN 3
+                    WHEN c.LifeTimeValue = 'Medium' THEN 2
+                    WHEN c.LifeTimeValue = 'Low' THEN 1
+                    ELSE 0
+                END) AS AvgLTV
             FROM FACTSALE f
             JOIN BRIDGEPRODUCTSPECIALOFFER b 
                 ON b.BrdgProductSpecialOfferKey = f.BrdgProductSpecialOfferKey
@@ -134,18 +150,27 @@ class MarketSegmentationPipeline:
             JOIN DIMPRODUCT p 
                 ON p.ProductSuggorateKey = b.ProductSuggorateKey
                 AND p.IsActive = TRUE
+            JOIN DIMSPECIALOFFER so
+                ON so.SpecialOfferSuggorateKey = b.SpecialOfferSuggorateKey
+                AND so.IsActive = TRUE
+            JOIN DIMCUSTOMER c
+                ON c.CustomerSuggorateKey = f.DimCustomerKey
+                AND c.IsActive = TRUE
             JOIN DIMTERRITORY t 
                 ON t.TerritorySuggorateKey = f.DimTerritoryKey
             LEFT JOIN DIMTIME dt 
                 ON dt.DateKey = f.DimTimeKey
-            GROUP BY t.CountryRegion, dt.Year, dt.Month, dt.DateKey
+            GROUP BY t.Territory_ID, t.CountryRegion, dt.Year, dt.Month
+        ),
+        DistinctMonths AS (
+            SELECT DISTINCT Year, Month
+            FROM MonthlyMarketData
         ),
         RecentMonths AS (
             -- Get the most recent N months from the available data
-            SELECT DISTINCT Year, Month, DateKey
-            FROM MonthlyMarketData
+            SELECT TOP {lookback_months} Year, Month
+            FROM DistinctMonths
             ORDER BY Year DESC, Month DESC
-            LIMIT {lookback_months}
         )
         SELECT 
             m.Market,
@@ -159,6 +184,11 @@ class MarketSegmentationPipeline:
             m.AvgOrderValue,
             m.UniqueSubcategories,
             m.UniqueProductLines,
+            m.AvgDiscount,
+            m.PlatinumShare,
+            m.GoldShare,
+            m.SilverShare,
+            m.AvgLTV,
             -- Calculate growth rates (compared to previous month)
             LAG(m.Revenue) OVER (PARTITION BY m.Market ORDER BY m.Year, m.Month) AS PrevRevenue,
             LAG(m.Quantity) OVER (PARTITION BY m.Market ORDER BY m.Year, m.Month) AS PrevQuantity
@@ -190,10 +220,12 @@ class MarketSegmentationPipeline:
         print(f"✅ Extracted {len(df)} records for {df['market'].nunique()} markets")
         print(f"   Date range: {df['datekey'].min()} to {df['datekey'].max()}")
         
-        # Show data per market
-        market_counts = df.groupby('market').size().sort_values(ascending=False)
-        print(f"   Top markets by record count:")
-        for market, count in market_counts.head(5).items():
+        # Show data per market with ACTUAL month count
+        market_month_counts = df.groupby('market')[['year', 'month']].apply(
+            lambda x: x.drop_duplicates().shape[0]
+        ).sort_values(ascending=False)
+        print(f"   Markets by month count:")
+        for market, count in market_month_counts.items():
             print(f"     - {market}: {count} months")
         
         return df
@@ -201,7 +233,7 @@ class MarketSegmentationPipeline:
     def extract_static_features(self) -> pd.DataFrame:
         """
         Extract static/aggregated features for each market
-        These features don't change over time (or change slowly)
+        These are truly static features that don't change meaningfully over time
         """
         print(f"📊 Extracting static features per market...")
         
@@ -210,35 +242,21 @@ class MarketSegmentationPipeline:
         
         query = """
         SELECT
-            t.CountryRegion AS Market,
-            -- Average discount percentage per market
-            AVG(so.DiscountPct) AS AvgDiscount,
-            -- Customer loyalty distribution
-            SUM(CASE WHEN c.LoyatyStatus = 'Platinum' THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(DISTINCT c.CustomerSuggorateKey), 0) AS PlatinumShare,
-            SUM(CASE WHEN c.LoyatyStatus = 'Gold' THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(DISTINCT c.CustomerSuggorateKey), 0) AS GoldShare,
-            SUM(CASE WHEN c.LoyatyStatus = 'Silver' THEN 1 ELSE 0 END) * 1.0 / NULLIF(COUNT(DISTINCT c.CustomerSuggorateKey), 0) AS SilverShare,
-            -- Average customer lifetime value
-            AVG(c.LifeTimeValue) AS AvgLTV,
-            -- Product mix
+            CONCAT(t.Territory_ID, ' - ', t.CountryRegion) AS Market,
+            -- Product diversity (relatively stable)
             COUNT(DISTINCT p.ProductLine) AS TotalProductLines,
             COUNT(DISTINCT p.Subcategory) AS TotalSubcategories
         FROM FACTSALE f
         JOIN DIMTERRITORY t 
             ON t.TerritorySuggorateKey = f.DimTerritoryKey
-        JOIN DIMCUSTOMER c 
-            ON c.CustomerSuggorateKey = f.DimCustomerKey
-            AND c.IsActive = TRUE
         JOIN BRIDGEPRODUCTSPECIALOFFER b 
             ON b.BrdgProductSpecialOfferKey = f.BrdgProductSpecialOfferKey
             AND b.IsActive = TRUE
-        JOIN DIMSPECIALOFFER so 
-            ON so.SpecialOfferSuggorateKey = b.SpecialOfferSuggorateKey
-            AND so.IsActive = TRUE
         JOIN DIMPRODUCT p 
             ON p.ProductSuggorateKey = b.ProductSuggorateKey
             AND p.IsActive = TRUE
-        GROUP BY t.CountryRegion
-        ORDER BY t.CountryRegion
+        GROUP BY t.Territory_ID, t.CountryRegion
+        ORDER BY t.Territory_ID
         """
         
         cur.execute(query)
@@ -257,7 +275,7 @@ class MarketSegmentationPipeline:
         
         return df
     
-    def prepare_sequences(self, df: pd.DataFrame, static_features_df: pd.DataFrame, sequence_length=6) -> Tuple[np.ndarray, np.ndarray, List[str], pd.DataFrame]:
+    def prepare_sequences(self, df: pd.DataFrame, static_features_df: pd.DataFrame, sequence_length=3) -> Tuple[np.ndarray, np.ndarray, List[str], pd.DataFrame]:
         """
         Prepare time-series sequences and static features for each market
         
@@ -275,16 +293,18 @@ class MarketSegmentationPipeline:
         print(f"🔧 Preparing sequences (length: {sequence_length})...")
         
         # Features to use for time-series (lowercase to match Snowflake)
+    # Now includes dynamic SCD Type 2 features that change over time
         time_feature_cols = [
             'revenue', 'quantity', 'ordercount', 'customercount', 
             'avgordervalue', 'uniquesubcategories', 'uniqueproductlines',
-            'revenuegrowth', 'quantitygrowth'
+            'revenuegrowth', 'quantitygrowth',
+            # Dynamic features (moved from static)
+            'avgdiscount', 'platinumshare', 'goldshare', 'silvershare', 'avgltv'
         ]
         
-        # Static features (from static_features_df)
+        # Static features (from static_features_df) - truly static only
         static_feature_cols = [
-            'avgdiscount', 'platinumshare', 'goldshare', 'silvershare',
-            'avgltv', 'totalproductlines', 'totalsubcategories'
+            'totalproductlines', 'totalsubcategories'
         ]
         
         self.feature_names = time_feature_cols
@@ -351,6 +371,92 @@ class MarketSegmentationPipeline:
             return 'Medium'
         else:
             return 'High'
+    
+    def prepare_sequences_for_month(self, df: pd.DataFrame, static_features_df: pd.DataFrame, 
+                                    target_year: int, target_month: int, window_size=3) -> Tuple[np.ndarray, np.ndarray, List[str], pd.DataFrame]:
+        """
+        Prepare sequences for a specific target month using a rolling window
+        
+        Args:
+            df: DataFrame with all time-series data
+            static_features_df: DataFrame with static features
+            target_year: Year of the target month
+            target_month: Month number (1-12)
+            window_size: Number of months to include in sequence (including target month)
+            
+        Returns:
+            sequences, static_features, market_names, metadata for the target month
+        """
+        print(f"Preparing sequences for {int(target_year)}-{int(target_month):02d} (window={window_size} months)...")
+        
+        # Features to use
+        time_feature_cols = [
+            'revenue', 'quantity', 'ordercount', 'customercount', 
+            'avgordervalue', 'uniquesubcategories', 'uniqueproductlines',
+            'revenuegrowth', 'quantitygrowth',
+            'avgdiscount', 'platinumshare', 'goldshare', 'silvershare', 'avgltv'
+        ]
+        
+        static_feature_cols = ['totalproductlines', 'totalsubcategories']
+        
+        sequences = []
+        static_features = []
+        market_names = []
+        metadata_list = []
+        
+        for market in df['market'].unique():
+            market_data = df[df['market'] == market].sort_values(['year', 'month'])
+            
+            # Get data up to and including target month
+            target_data = market_data[
+                (market_data['year'] < target_year) |
+                ((market_data['year'] == target_year) & (market_data['month'] <= target_month))
+            ]
+            
+            if len(target_data) < window_size:
+                continue  # Skip if insufficient data
+            
+            # Get the most recent window_size months
+            recent_data = target_data.tail(window_size)
+            
+            # Check if target month is included
+            if not ((recent_data['year'] == target_year) & (recent_data['month'] == target_month)).any():
+                continue
+            
+            sequence = recent_data[time_feature_cols].values
+            
+            # Get static features
+            static_row = static_features_df[static_features_df['market'] == market]
+            if len(static_row) == 0:
+                continue
+            
+            static_feat = static_row[static_feature_cols].values.flatten()
+            
+            sequences.append(sequence)
+            static_features.append(static_feat)
+            market_names.append(market)
+            
+            # Metadata for target month
+            target_month_data = recent_data[(recent_data['year'] == target_year) & 
+                                           (recent_data['month'] == target_month)].iloc[0]
+            metadata_list.append({
+                'Market': market,
+                'DateKey': target_month_data['datekey'],
+                'Revenue': target_month_data['revenue'],
+                'Quantity': target_month_data['quantity'],
+                'ProductRange': self._infer_product_range(target_month_data['revenue'])
+            })
+        
+        
+        if len(sequences) == 0:
+            raise ValueError(f"No markets have sufficient data for {target_year}-{int(target_month):02d}!")
+        
+        sequences = np.array(sequences)
+        static_features = np.array(static_features)
+        metadata = pd.DataFrame(metadata_list)
+        
+        print(f"✅ Prepared {len(sequences)} sequences for {target_year}-{int(target_month):02d}")
+        return sequences, static_features, market_names, metadata
     
     def normalize_sequences(self, sequences: np.ndarray) -> np.ndarray:
         """Normalize sequences using StandardScaler"""
@@ -569,7 +675,7 @@ class MarketSegmentationPipeline:
         
         print(f"✅ Saved {len(metadata)} records to FACTMARKETSEGMENTATION")
     
-    def run_pipeline(self, sequence_length=6, n_clusters=5, epochs=50):
+    def run_pipeline(self, sequence_length=3, n_clusters=5, epochs=50):
         """Run the complete hybrid pipeline (LSTM + Static Features)"""
         print("=" * 80)
         print("🚀 MARKET SEGMENTATION PIPELINE - HYBRID APPROACH")
@@ -577,7 +683,7 @@ class MarketSegmentationPipeline:
         print("=" * 80)
         
         # Step 1: Extract time-series data
-        df = self.extract_time_series_data(lookback_months=12)
+        df = self.extract_time_series_data(lookback_months=sequence_length)
         
         # Step 2: Extract static features
         static_features_df = self.extract_static_features()
@@ -622,6 +728,115 @@ class MarketSegmentationPipeline:
             'metadata': metadata,
             'training_losses': losses
         }
+    
+    def run_monthly_segmentation(self, window_size=3, n_clusters=5, epochs=50):
+        """
+        Run monthly segmentation - Dynamic Monthly Segments approach
+        Processes each month independently to track segment movement over time
+        
+        Args:
+            window_size: Number of months to use in rolling window (default: 3)
+            n_clusters: Number of segments
+            epochs: Training epochs for LSTM
+        """
+        print("=" * 80)
+        print("🚀 MONTHLY MARKET SEGMENTATION PIPELINE")
+        print("   Dynamic Monthly Segments - Track movement over time")
+        print(f"   Window Size: {window_size} months | Clusters: {n_clusters}")
+        print("=" * 80)
+        
+        # Step 1: Extract ALL time-series data
+        df = self.extract_time_series_data(lookback_months=12)  # Get all available data
+        
+        # Step 2: Extract static features
+        static_features_df = self.extract_static_features()
+        
+        # Step 3: Get list of months to process
+        available_months = df[['year', 'month']].drop_duplicates().sort_values(['year', 'month'])
+        print(f"\n📅 Found {len(available_months)} months of data")
+        
+        # Filter months that have enough history (window_size)
+        processable_months = []
+        for idx, row in available_months.iterrows():
+            year, month = row['year'], row['month']
+            # Check if we have enough previous months
+            prior_months = available_months[
+                (available_months['year'] < year) |
+                ((available_months['year'] == year) & (available_months['month'] <= month))
+            ]
+            if len(prior_months) >= window_size:
+                processable_months.append((year, month))
+        
+        print(f"📊 Processing {len(processable_months)} months (need {window_size}-month window)")
+        
+        if len(processable_months) == 0:
+            raise ValueError(f"No months have sufficient history! Need at least {window_size} months of data.")
+        
+        # Step 4: Train LSTM model once on all data
+        print(f"\n🎓 Training LSTM model on all available data...")
+        
+        # Prepare training data using the most recent window
+        latest_year, latest_month = processable_months[-1]
+        train_sequences, train_static, _, _ = self.prepare_sequences_for_month(
+            df, static_features_df, latest_year, latest_month, window_size
+        )
+        
+        # Normalize
+        train_sequences_normalized = self.normalize_sequences(train_sequences)
+        
+        # Build and train model
+        input_dim = train_sequences.shape[2]
+        self.build_model(input_dim)
+        losses = self.train_autoencoder(train_sequences_normalized, epochs=epochs)
+        
+        print(f"✅ LSTM model trained successfully!\n")
+        
+        # Step 5: Process each month
+        all_results = []
+        
+        for year, month in processable_months:
+            print(f"\n{'='*60}")
+            print(f"📆 Processing {int(year)}-{int(month):02d}")
+            print(f"{'='*60}")
+            
+            # Prepare sequences for this month
+            sequences, static_features, market_names, metadata = self.prepare_sequences_for_month(
+                df, static_features_df, year, month, window_size
+            )
+            
+            # Normalize using the same scaler
+            sequences_normalized = self.scaler.transform(
+                sequences.reshape(-1, sequences.shape[2])
+            ).reshape(sequences.shape)
+            
+            # Generate embeddings
+            embeddings = self.generate_embeddings(sequences_normalized)
+            
+            # Cluster
+            cluster_labels, silhouette = self.cluster_embeddings(
+                embeddings, static_features, n_clusters=n_clusters
+            )
+            
+            # Save to Snowflake
+            self.save_to_snowflake(metadata, cluster_labels, embeddings, silhouette)
+            
+            all_results.append({
+                'year': year,
+                'month': month,
+                'num_markets': len(market_names),
+                'silhouette': silhouette
+            })
+        
+        print("\n" + "=" * 80)
+        print("✅ MONTHLY SEGMENTATION COMPLETED")
+        print("=" * 80)
+        print(f"\n📊 Summary:")
+        for result in all_results:
+            print(f"   {int(result['year'])}-{int(result['month']):02d}: {result['num_markets']} markets, "
+                  f"silhouette={result['silhouette']:.4f}")
+        
+        return all_results
+
 
 
 def main():
@@ -645,7 +860,7 @@ def main():
     
     # Run pipeline
     results = pipeline.run_pipeline(
-        sequence_length=6,  # 6 months of history
+        sequence_length=3,  # 3 months of history
         n_clusters=5,       # Number of market segments
         epochs=50           # Training epochs
     )

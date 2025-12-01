@@ -10,8 +10,8 @@ This project implements a complete data warehouse and decision support system fo
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        SOURCE SYSTEM                                 │
-│                   AdventureWorks SQL Server                          │
+│                        SOURCE SYSTEM                                │
+│                   AdventureWorks SQL Server                         │
 │  (Sales, Production, Person schemas)                                │
 └────────────────────────┬────────────────────────────────────────────┘
                          │
@@ -21,7 +21,7 @@ This project implements a complete data warehouse and decision support system fo
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                      SNOWFLAKE DATA WAREHOUSE                        │
+│                      SNOWFLAKE DATA WAREHOUSE                       │
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │                    DIMENSION TABLES                          │   │
 │  │  - DimProduct (SCD Type 2)                                   │   │
@@ -42,7 +42,7 @@ This project implements a complete data warehouse and decision support system fo
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│              ANALYTICS & ML PIPELINE (Python)                        │
+│              ANALYTICS & ML PIPELINE (Python)                       │
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │  Market Segmentation Pipeline                                │   │
 │  │  - Extract time-series data from FactSale                    │   │
@@ -56,7 +56,7 @@ This project implements a complete data warehouse and decision support system fo
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                   SNOWFLAKE DATA WAREHOUSE                           │
+│                   SNOWFLAKE DATA WAREHOUSE                          │
 │  ┌──────────────────────────────────────────────────────────────┐   │
 │  │         FactMarketSegmentation (Updated)                     │   │
 │  │  - Segment assignments per market                            │   │
@@ -68,7 +68,7 @@ This project implements a complete data warehouse and decision support system fo
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    STREAMLIT APPLICATIONS                            │
+│                    STREAMLIT APPLICATIONS                           │
 │  - Market Segmentation Pipeline UI                                  │
 │  - Market Clustering Analysis Dashboard                             │
 │  - Data Warehouse Verification Tool                                 │
