@@ -333,6 +333,9 @@ def render_official_dashboard():
     
     segment_metrics.columns = ['Markets Count', 'Total Revenue', 'Avg Revenue', 
                                'Total Quantity', 'Avg Quantity']
+    
+    # Calculate Avg Unit Price
+    segment_metrics['Avg Unit Price'] = (segment_metrics['Total Revenue'] / segment_metrics['Total Quantity']).round(2)
     segment_metrics = segment_metrics.reset_index()
     segment_metrics = segment_metrics.sort_values('Total Revenue', ascending=False)
     
