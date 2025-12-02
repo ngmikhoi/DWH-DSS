@@ -47,7 +47,7 @@ This project implements a complete data warehouse and decision support system fo
 │  │  Dynamic Monthly Segmentation Pipeline                       │   │
 │  │  - Extract time-series & static features                     │   │
 │  │  - Hybrid Model: LSTM (Time-series) + Static Features        │   │
-│  │  - Rolling Window Processing (3-month window)                │   │
+│  │  - Rolling Window Processing (5-month window)                │   │
 │  │  - Generate monthly segment assignments                      │   │
 │  └──────────────────────────────────────────────────────────────┘   │
 └────────────────────────┬────────────────────────────────────────────┘
@@ -86,6 +86,19 @@ This project implements a complete data warehouse and decision support system fo
 
 ## File Structure and Roles
 
+```bash
+DWH-DSS/
+├── .streamlit/
+│   └── secrets.toml          # Snowflake credentials
+├── data_transform.sql        # ELT transformations & SCD logic
+├── dwh_init.sql              # Data Warehouse Schema DDL
+├── market_clustering_app.py  # Streamlit Dashboard & UI
+├── market_segmentation_pipeline.py # Core ML & Clustering Logic
+├── requirements.txt          # Python dependencies
+├── .env                      # Environment variables (Gemini API Key)
+└── README.md                 # Project documentation
+```
+
 ### Core Pipeline Files
 
 #### `market_segmentation_pipeline.py`
@@ -94,7 +107,7 @@ This project implements a complete data warehouse and decision support system fo
 **Responsibilities**:
 - **Data Extraction**: Pulls time-series sales data and static market features from Snowflake.
 - **Hybrid Feature Engineering**: Combines LSTM-generated temporal embeddings with static features (Product Lines, Subcategories).
-- **Dynamic Monthly Segmentation**: Implements a rolling window approach (e.g., 3 months) to segment markets for *each specific month*, allowing for tracking of segment evolution over time.
+- **Dynamic Monthly Segmentation**: Implements a rolling window approach (e.g., 5 months) to segment markets for *each specific month*, allowing for tracking of segment evolution over time.
 - **Model Training**: Trains an LSTM Autoencoder to learn temporal patterns from sales history.
 - **Clustering**: Applies K-Means clustering on the combined feature set.
 - **Persistence**: Saves results to `FactMarketSegmentation` in Snowflake.
@@ -136,13 +149,20 @@ This project implements a complete data warehouse and decision support system fo
             *   Correlation Heatmaps.
             *   Elbow Method / Silhouette Analysis.
 
-### Database Schema Files
+### Database & ETL Scripts
 
 #### `dwh_init.sql`
 **Role**: SQL DDL script for initializing the Snowflake data warehouse schema.
 - Creates Dimension tables (Product, Customer, Territory, Time, SpecialOffer).
 - Creates Fact tables (FactSale, FactMarketSegmentation).
 - Sets up SCD Type 2 tracking columns (`ValidFrom`, `ValidTo`, `IsActive`).
+
+#### `data_transform.sql`
+**Role**: SQL script for performing ELT data transformations and loading data into the Data Warehouse.
+- **SCD Type 2 Implementation**: Handles versioning for `DimProduct`, `DimSpecialOffer`, and `DimCustomer` to track historical changes.
+- **Dimension Loading**: Populates `DimTerritory` and generates `DimTime` data.
+- **Fact Table Loading**: Transforms and loads transactional data into `FactSale`, handling surrogate key lookups.
+- **Bridge Table Management**: Manages the `BridgeProductSpecialOffer` table for many-to-many relationships.
 
 ## Machine Learning Pipeline Details
 
@@ -155,16 +175,16 @@ This project implements a complete data warehouse and decision support system fo
 **Steps**:
 
 1.  **Data Extraction**:
-    *   Extract ALL available monthly sales data.
+    *   Extract recent 12 months of sales data.
     *   Extract static features: `TotalProductLines`, `TotalSubcategories`.
 
 2.  **Rolling Window Processing**:
     *   The pipeline iterates through each available month in the dataset.
-    *   For each target month $T$, it looks back at a fixed window (e.g., $T-2, T-1, T$).
+    *   For each target month $T$, it looks back at a fixed window (e.g., $T-4, ..., T$).
     *   Markets with insufficient history for the window are skipped for that specific month.
 
 3.  **Hybrid Embedding Generation**:
-    *   **Temporal Features**: The 3-month sequence of sales metrics (Revenue, Quantity, Growth, etc.) is fed into a trained **LSTM Autoencoder** to produce a 32-dimensional embedding vector.
+    *   **Temporal Features**: The 5-month sequence of sales metrics (Revenue, Quantity, Growth, etc.) is fed into a trained **LSTM Autoencoder** to produce a 32-dimensional embedding vector.
     *   **Static Features**: Static attributes are normalized and concatenated with the LSTM embedding.
     *   **Combined Vector**: The final feature vector represents both "how the market is performing recently" and "what the market structure is".
 
@@ -182,6 +202,7 @@ This project implements a complete data warehouse and decision support system fo
 1.  **Python 3.8+**
 2.  **Snowflake Account** with appropriate permissions.
 3.  **`.streamlit/secrets.toml`** configured with Snowflake credentials.
+4.  **A Gemini API key** for AI suggestion in the Playground mode.
 
 ### Installation
 ```bash
