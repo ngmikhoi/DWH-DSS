@@ -7,3 +7,6 @@ snowflake-connector-python
 torch>=2.0.0
 matplotlib>=3.7.0
 seaborn>=0.12.0
+openai>=1.0.0
+google-generativeai>=0.3.0
+python-dotenv>=1.0.0
