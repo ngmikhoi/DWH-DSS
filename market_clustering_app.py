@@ -17,6 +17,12 @@ import json
 import snowflake.connector
 import sys
 import subprocess
+import os
+from dotenv import load_dotenv
+import google.generativeai as genai
+
+# Load environment variables
+load_dotenv()
 
 # Import the pipeline class
 from market_segmentation_pipeline import MarketSegmentationPipeline
@@ -76,6 +82,53 @@ def get_snowflake_connection():
         )
     except Exception as e:
         st.error(f"❌ Error connecting to Snowflake: {e}")
+        return None
+
+def get_gemini_response(prompt_text, data_context):
+    """Call Gemini API for suggestions"""
+    api_key = os.getenv("GEMINI_API_KEY")
+    
+    if not api_key:
+        # Fallback to secrets if not in .env (optional, but good for backward compatibility)
+        if "GEMINI_API_KEY" in st.secrets:
+            api_key = st.secrets["GEMINI_API_KEY"]
+        else:
+            st.warning("⚠️ GEMINI_API_KEY not found in .env or secrets.toml. AI features disabled.")
+            return None
+
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-3-pro-preview')
+        
+        full_prompt = f"""
+        You are an expert Data Analyst and Business Strategist for a Retail company. You are asked to provide insights and recommendations based on the data provided. Keep it concise, actionable, and professional.
+
+        <task>
+        {prompt_text}
+        </task>
+        
+        <data_context>
+        {data_context}
+        </data_context>
+        
+        <guidelines>
+        1. **Benchmarking**: Compare regions/segments. Take the best performer as a baseline and explain what makes it stand out compared to others. Explain briefly your response.
+        2. **Pruning**: If a segment or market is underperforming (low revenue, unclear distinction), boldly suggest cutting or restructuring it. Explain briefly your response.
+        3. **Profiling**: Identify the top contributors and list their key properties (e.g., "High Revenue, Low Discount, Platinum Loyalty") so the user knows what to look for. Explain briefly your response.
+        4. **Temporal Trends**: If time-series data is provided, analyze the movement. Is a segment growing or shrinking? Why? Explain briefly your response.
+        5. **Formatting**: Do NOT use LaTeX math formatting for numbers, currency, or percentages. Use standard text (e.g. $100, 10%) to ensure correct rendering.
+        </guidelines>
+        """
+        
+        with st.spinner("🤖 AI is analyzing..."):
+            response = model.generate_content(full_prompt)
+            print(response.text)
+            # Escape dollar signs to prevent Streamlit from interpreting them as LaTeX math
+            cleaned_text = response.text.replace("$", "\\$")
+            return cleaned_text
+            
+    except Exception as e:
+        st.error(f"Error calling Gemini API: {e}")
         return None
 
 
@@ -285,6 +338,25 @@ def render_official_dashboard():
     
     st.dataframe(segment_metrics, use_container_width=True)
 
+    if st.button("✨ Auto-Suggest (Overview)", key="btn_overview_auto"):
+        data_summary = segment_metrics.to_markdown()
+        prompt = "Analyze these segment metrics. Which segment is the 'Star' and which is the 'Dog'? Suggest a strategy for the worst performing segment."
+        insight = get_gemini_response(prompt, data_summary)
+        if insight:
+            st.markdown("### 🤖 AI Analysis")
+            st.info(insight)
+
+    with st.expander("🤖 I know you are lazy. Ask me anything!"):
+        user_question_overview = st.text_input("Ask about the segment overview:", 
+                                             value="Which segment is the 'Star' and which is the 'Dog'? Suggest a strategy for the worst performing segment.",
+                                             key="input_overview")
+        if st.button("Ask AI", key="btn_overview"):
+            data_summary = segment_metrics.to_markdown()
+            insight = get_gemini_response(user_question_overview, data_summary)
+            if insight:
+                st.markdown("### 🤖 AI Analysis")
+                st.info(insight)
+
     st.markdown("---")
 
     # ========================================================================
@@ -373,6 +445,61 @@ def render_official_dashboard():
         fig_qty.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
         st.plotly_chart(fig_qty, use_container_width=True)
     
+    if st.button("✨ Auto-Suggest (Comparison)", key="btn_comparison_auto"):
+        # Prepare data context
+        share_data = rev_by_seg.to_markdown()
+        market_share_data = market_counts.to_markdown()
+        eff_data = avg_rev_by_seg.to_markdown()
+        qty_data = qty_by_seg.to_markdown()
+        
+        context = f"""
+        1. Revenue Share Data:
+        {share_data}
+        
+        2. Market Count Share Data:
+        {market_share_data}
+        
+        3. Efficiency (Avg Revenue) Data:
+        {eff_data}
+        
+        4. Total Quantity Data:
+        {qty_data}
+        """
+        prompt = "Compare the segments. clearly there are different performance levels. Suggest if we should merge any segments or focus resources on specific ones. Use the 'Benchmarking' approach."
+        insight = get_gemini_response(prompt, context)
+        if insight:
+            st.markdown("### 🤖 AI Analysis")
+            st.info(insight)
+
+    with st.expander("🤖 I know you are lazy. Ask me anything!"):
+        user_question_comp = st.text_input("Ask about segment comparison:", 
+                                         value="Compare the segments. Suggest if we should merge any segments or focus resources on specific ones.",
+                                         key="input_comparison")
+        if st.button("Ask AI", key="btn_comparison"):
+            # Prepare data context
+            share_data = rev_by_seg.to_markdown()
+            market_share_data = market_counts.to_markdown()
+            eff_data = avg_rev_by_seg.to_markdown()
+            qty_data = qty_by_seg.to_markdown()
+            
+            context = f"""
+            1. Revenue Share Data:
+            {share_data}
+            
+            2. Market Count Share Data:
+            {market_share_data}
+            
+            3. Efficiency (Avg Revenue) Data:
+            {eff_data}
+            
+            4. Total Quantity Data:
+            {qty_data}
+            """
+            insight = get_gemini_response(user_question_comp, context)
+            if insight:
+                st.markdown("### 🤖 AI Analysis")
+                st.info(insight)
+    
     # ========================================================================
     # TEMPORAL TRENDS (if historical data available)
     # ========================================================================
@@ -431,6 +558,26 @@ def render_official_dashboard():
                     labels={'DATE': 'Date', 'MARKETCOUNT': 'Market Count', 'SEGMENTID': 'Segment'}
                 )
                 st.plotly_chart(fig_trend_markets, use_container_width=True)
+
+                # AI Analysis for Trends
+                if st.button("✨ Auto-Suggest (Trends)", key="btn_trends_auto"):
+                    trend_summary = trends_filtered.groupby(['SEGMENTID', 'DATEKEY'])[['TOTALREVENUE', 'TOTALQUANTITY', 'MARKETCOUNT']].sum().reset_index().to_markdown()
+                    prompt = "Analyze the temporal trends. Are any segments growing or shrinking significantly? What does the movement suggest about market dynamics?"
+                    insight = get_gemini_response(prompt, trend_summary)
+                    if insight:
+                        st.markdown("### 🤖 AI Analysis")
+                        st.info(insight)
+
+                with st.expander("🤖 I know you are lazy. Ask me anything!"):
+                    user_question_trends = st.text_input("Ask about temporal trends:", 
+                                                       value="Analyze the temporal trends. Are any segments growing or shrinking significantly?",
+                                                       key="input_trends")
+                    if st.button("Ask AI", key="btn_trends"):
+                        trend_summary = trends_filtered.groupby(['SEGMENTID', 'DATEKEY'])[['TOTALREVENUE', 'TOTALQUANTITY', 'MARKETCOUNT']].sum().reset_index().to_markdown()
+                        insight = get_gemini_response(user_question_trends, trend_summary)
+                        if insight:
+                            st.markdown("### 🤖 AI Analysis")
+                            st.info(insight)
             else:
                 st.info("No trend data available for selected segments.")
         else:
@@ -497,6 +644,63 @@ def render_official_dashboard():
     
     st.dataframe(market_details, use_container_width=True)
 
+    if st.button("✨ Auto-Suggest (Details)", key="btn_details_auto"):
+        # Calculate segment stats
+        seg_rev = segment_data['REVENUE'].sum()
+        seg_qty = segment_data['QUANTITY'].sum()
+        seg_mkts = len(segment_data)
+        
+        top_markets = market_details.head(10).to_markdown()
+        bottom_markets = market_details.tail(10).to_markdown()
+        
+        context = f"""
+        Segment Summary:
+        - Total Revenue: ${seg_rev:,.0f}
+        - Total Quantity: {seg_qty:,.0f}
+        - Total Markets: {seg_mkts}
+        
+        Top 10 Markets (Best Performers):
+        {top_markets}
+        
+        Bottom 10 Markets (Worst Performers):
+        {bottom_markets}
+        """
+        prompt = f"Analyze the markets in Segment {selected_segment_drill}. Identify the characteristics of the top performers. Suggest if the bottom performers should be cut (Pruning)."
+        insight = get_gemini_response(prompt, context)
+        if insight:
+            st.markdown("### 🤖 AI Analysis")
+            st.info(insight)
+
+    with st.expander("🤖 I know you are lazy. Ask me anything!"):
+        user_question_details = st.text_input("Ask about market details:", 
+                                            value=f"Analyze the markets in Segment {selected_segment_drill}. Identify top performers and suggest if bottom performers should be cut.",
+                                            key="input_details")
+        if st.button("Ask AI", key="btn_details"):
+            # Calculate segment stats
+            seg_rev = segment_data['REVENUE'].sum()
+            seg_qty = segment_data['QUANTITY'].sum()
+            seg_mkts = len(segment_data)
+            
+            top_markets = market_details.head(10).to_markdown()
+            bottom_markets = market_details.tail(10).to_markdown()
+            
+            context = f"""
+            Segment Summary:
+            - Total Revenue: ${seg_rev:,.0f}
+            - Total Quantity: {seg_qty:,.0f}
+            - Total Markets: {seg_mkts}
+            
+            Top 10 Markets (Best Performers):
+            {top_markets}
+            
+            Bottom 10 Markets (Worst Performers):
+            {bottom_markets}
+            """
+            insight = get_gemini_response(user_question_details, context)
+            if insight:
+                st.markdown("### 🤖 AI Analysis")
+                st.info(insight)
+
     st.markdown("---")
 
 
@@ -511,6 +715,34 @@ def render_official_dashboard():
         st.info(f"**Model Version:** {filtered_df['MODELVERSION'].iloc[0]}")
     with col2:
         st.info(f"**Last Updated:** {filtered_df['CREATEDAT'].max()}")
+
+    st.markdown("---")
+    st.subheader("🤖 Overall Strategic Feedback")
+    
+    if st.button("✨ Generate Final Report", key="btn_final_auto"):
+        # Aggregate high level stats
+        total_rev = filtered_df['REVENUE'].sum()
+        seg_summary = filtered_df.groupby('SEGMENTID')[['REVENUE', 'QUANTITY']].sum().to_markdown()
+        
+        context = f"Total Revenue: {total_rev}\n\nSegment Summary:\n{seg_summary}"
+        prompt = "Provide a final executive summary and strategic recommendation for the entire market segmentation dashboard. Focus on high-level strategy."
+        insight = get_gemini_response(prompt, context)
+        if insight:
+            st.success(insight)
+
+    with st.expander("🤖 I know you are lazy. Ask me anything!"):
+        user_question_final = st.text_input("Ask for strategic feedback:", 
+                                          value="Provide a final executive summary and strategic recommendation for the entire market segmentation dashboard.",
+                                          key="input_final")
+        if st.button("Ask AI", key="btn_final"):
+            # Aggregate high level stats
+            total_rev = filtered_df['REVENUE'].sum()
+            seg_summary = filtered_df.groupby('SEGMENTID')[['REVENUE', 'QUANTITY']].sum().to_markdown()
+            
+            context = f"Total Revenue: {total_rev}\n\nSegment Summary:\n{seg_summary}"
+            insight = get_gemini_response(user_question_final, context)
+            if insight:
+                st.success(insight)
 
 # -----------------------------------------------------------------------------
 # MODE 2: PIPELINE MANAGEMENT
@@ -687,6 +919,42 @@ def render_playground():
     
     # 3. Select K
     k = st.sidebar.slider("3. Number of Clusters (K)", 2, 10, 4)
+
+    if st.sidebar.button("💡 Suggest Best K", help="Calculates optimal K using all features selected in 'Select Features' above"):
+        if not selected_features:
+            st.sidebar.warning("Select features first!")
+        else:
+            with st.sidebar.status(f"Calculating best K using {len(selected_features)} features..."):
+                # Prepare data
+                X_suggest = month_data[selected_features].fillna(0)
+                
+                if len(X_suggest) < 3:
+                    st.sidebar.error("Not enough data points (need > 2)")
+                else:
+                    scaler_suggest = StandardScaler()
+                    X_scaled_suggest = scaler_suggest.fit_transform(X_suggest)
+                    
+                    silhouette_scores = []
+                    k_range = range(2, 11)
+                    
+                    for k_cand in k_range:
+                        if len(X_scaled_suggest) <= k_cand:
+                            break
+                        kmeans_cand = KMeans(n_clusters=k_cand, random_state=42, n_init=10)
+                        labels_cand = kmeans_cand.fit_predict(X_scaled_suggest)
+                        score = silhouette_score(X_scaled_suggest, labels_cand)
+                        silhouette_scores.append(score)
+                    
+                    if silhouette_scores:
+                        best_idx = np.argmax(silhouette_scores)
+                        best_k = k_range[best_idx]
+                        best_score = silhouette_scores[best_idx]
+                        
+                        st.sidebar.success(f"Best K: **{best_k}** (Score: {best_score:.3f})")
+                        
+                        # Chart
+                        scores_df = pd.DataFrame({'K': k_range[:len(silhouette_scores)], 'Silhouette': silhouette_scores})
+                        st.sidebar.line_chart(scores_df.set_index('K'))
     
     if not selected_features:
         st.warning("Please select at least one feature.")
@@ -708,7 +976,19 @@ def render_playground():
         kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
         clusters = kmeans.fit_predict(X_scaled)
         
-        month_data['CLUSTER'] = clusters
+        # Reorder clusters (Rank 1 = Highest Value)
+        # Determine metric to sort by (Revenue if available, else first selected feature)
+        sort_metric = 'REVENUE' if 'REVENUE' in selected_features else selected_features[0]
+        
+        # Create temp df for sorting
+        temp_df = pd.DataFrame({'Cluster': clusters, 'Metric': month_data[sort_metric].values})
+        cluster_stats = temp_df.groupby('Cluster')['Metric'].mean().sort_values(ascending=False)
+        
+        # Map old -> new (1-based)
+        mapping = {old_id: new_rank for new_rank, old_id in enumerate(cluster_stats.index, 1)}
+        new_clusters = [mapping[c] for c in clusters]
+        
+        month_data['CLUSTER'] = new_clusters
         month_data['CLUSTER'] = month_data['CLUSTER'].astype(str)
         
         # Calculate Silhouette
@@ -740,13 +1020,36 @@ def render_playground():
         with col2:
             # Cluster Stats
             st.markdown("#### Cluster Profiles")
-            stats = month_data.groupby('CLUSTER')[selected_features].mean().reset_index()
+            # Calculate mean and count
+            stats_mean = month_data.groupby('CLUSTER')[selected_features].mean()
+            stats_count = month_data.groupby('CLUSTER').size().rename("MARKET_COUNT")
+            stats = pd.concat([stats_count, stats_mean], axis=1).reset_index()
+            
             format_dict = {col: "{:.1f}" for col in selected_features}
             st.dataframe(stats.style.format(format_dict), use_container_width=True)
             
         # Detailed Data
         st.markdown("### 📋 Detailed Market Data")
         st.dataframe(month_data[['MARKET', 'CLUSTER'] + selected_features], use_container_width=True)
+        
+        if st.button("✨ Auto-Suggest (Playground)", key="btn_playground_auto"):
+            cluster_stats = stats.to_markdown()
+            prompt = f"Analyze these experimental clusters (K={k}). Do the clusters make sense based on the features {selected_features}? Which cluster is the most valuable?"
+            insight = get_gemini_response(prompt, cluster_stats)
+            if insight:
+                st.markdown("### 🤖 AI Analysis")
+                st.info(insight)
+
+        with st.expander("🤖 I know you are lazy. Ask me anything!"):
+            user_question_play = st.text_input("Ask about these clusters:", 
+                                             value=f"Analyze these experimental clusters (K={k}). Do they make sense based on the features {selected_features}?",
+                                             key="input_playground")
+            if st.button("Ask AI", key="btn_playground"):
+                cluster_stats = stats.to_markdown()
+                insight = get_gemini_response(user_question_play, cluster_stats)
+                if insight:
+                    st.markdown("### 🤖 AI Analysis")
+                    st.info(insight)
         
     except Exception as e:
         st.error(f"Clustering failed: {e}")

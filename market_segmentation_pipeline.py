@@ -146,16 +146,12 @@ class MarketSegmentationPipeline:
             FROM FACTSALE f
             JOIN BRIDGEPRODUCTSPECIALOFFER b 
                 ON b.BrdgProductSpecialOfferKey = f.BrdgProductSpecialOfferKey
-                AND b.IsActive = TRUE
             JOIN DIMPRODUCT p 
                 ON p.ProductSuggorateKey = b.ProductSuggorateKey
-                AND p.IsActive = TRUE
             JOIN DIMSPECIALOFFER so
                 ON so.SpecialOfferSuggorateKey = b.SpecialOfferSuggorateKey
-                AND so.IsActive = TRUE
             JOIN DIMCUSTOMER c
                 ON c.CustomerSuggorateKey = f.DimCustomerKey
-                AND c.IsActive = TRUE
             JOIN DIMTERRITORY t 
                 ON t.TerritorySuggorateKey = f.DimTerritoryKey
             LEFT JOIN DIMTIME dt 
@@ -251,10 +247,8 @@ class MarketSegmentationPipeline:
             ON t.TerritorySuggorateKey = f.DimTerritoryKey
         JOIN BRIDGEPRODUCTSPECIALOFFER b 
             ON b.BrdgProductSpecialOfferKey = f.BrdgProductSpecialOfferKey
-            AND b.IsActive = TRUE
         JOIN DIMPRODUCT p 
             ON p.ProductSuggorateKey = b.ProductSuggorateKey
-            AND p.IsActive = TRUE
         GROUP BY t.Territory_ID, t.CountryRegion
         ORDER BY t.Territory_ID
         """
@@ -621,6 +615,47 @@ class MarketSegmentationPipeline:
         
         return cluster_labels, silhouette
     
+    def reorder_clusters(self, cluster_labels: np.ndarray, metadata: pd.DataFrame, metric='Revenue') -> np.ndarray:
+        """
+        Reorder cluster labels so that Cluster 1 has the highest average metric (e.g. Revenue),
+        Cluster 2 has the second highest, etc.
+        Keeps -1 (noise) as -1.
+        """
+        print(f"🔄 Reordering clusters based on {metric}...")
+        
+        # Create a temporary dataframe for calculation
+        df_temp = pd.DataFrame({
+            'Cluster': cluster_labels,
+            'Metric': metadata[metric].values
+        })
+        
+        # Filter out noise (-1) for ranking
+        valid_clusters = df_temp[df_temp['Cluster'] != -1]
+        
+        if valid_clusters.empty:
+            return cluster_labels
+            
+        # Calculate average metric per cluster
+        cluster_stats = valid_clusters.groupby('Cluster')['Metric'].mean().sort_values(ascending=False)
+        
+        # Create mapping: Old Cluster ID -> New Rank (1-based)
+        mapping = {old_id: new_rank for new_rank, old_id in enumerate(cluster_stats.index, 1)}
+        
+        # Add -1 to mapping if it exists
+        if -1 in cluster_labels:
+            mapping[-1] = -1
+            
+        # Apply mapping
+        new_labels = np.array([mapping[label] for label in cluster_labels])
+        
+        print("   Cluster mapping (Old ID -> New Rank):")
+        for old_id, new_rank in mapping.items():
+            if old_id == -1: continue
+            avg_val = cluster_stats[old_id]
+            print(f"     - Old {old_id} (Avg {metric}: {avg_val:,.2f}) -> New {new_rank}")
+            
+        return new_labels
+    
     def save_to_snowflake(self, metadata: pd.DataFrame, cluster_labels: np.ndarray, 
                          embeddings: np.ndarray, silhouette: float):
         """Save segmentation results to FactMarketSegmentation table"""
@@ -710,6 +745,9 @@ class MarketSegmentationPipeline:
         cluster_labels, silhouette = self.cluster_embeddings(
             embeddings, static_features, n_clusters=n_clusters
         )
+        
+        # Step 8b: Reorder clusters based on Revenue (Rank 1 = Highest Revenue)
+        cluster_labels = self.reorder_clusters(cluster_labels, metadata, metric='Revenue')
         
         # Step 9: Save to Snowflake
         self.save_to_snowflake(metadata, cluster_labels, embeddings, silhouette)
@@ -816,6 +854,9 @@ class MarketSegmentationPipeline:
             cluster_labels, silhouette = self.cluster_embeddings(
                 embeddings, static_features, n_clusters=n_clusters
             )
+            
+            # Reorder clusters based on Revenue
+            cluster_labels = self.reorder_clusters(cluster_labels, metadata, metric='Revenue')
             
             # Save to Snowflake
             self.save_to_snowflake(metadata, cluster_labels, embeddings, silhouette)

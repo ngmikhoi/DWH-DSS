@@ -48,7 +48,6 @@ CREATE TABLE DWH.DIMTIME(
     Year INT
 );
 
-
 DROP TABLE IF EXISTS DWH.DIMCUSTOMER;
 CREATE TABLE DWH.DIMCUSTOMER(
 CustomerSuggorateKey NUMBER AUTOINCREMENT PRIMARY KEY,
@@ -62,7 +61,7 @@ IsActive BOOLEAN DEFAULT TRUE
 );
 
 --SCD TYPE 2
-DROP TABLE IF EXISTS DWH.BridgeProductSpecialOffer;
+DROP TABLE DWH.BridgeProductSpecialOffer;
 CREATE TABLE DWH.BridgeProductSpecialOffer(
 BrdgProductSpecialOfferKey NUMBER AUTOINCREMENT PRIMARY KEY,
 ProductSuggorateKey NUMBER NOT NULL,
@@ -73,8 +72,7 @@ IsActive BOOLEAN DEFAULT TRUE
 );
 -- Lấy dữ liệu từ bảng orderdetails
 
-
-DROP TABLE IF EXISTS DWH.FACTSALE;
+DROP TABLE DWH.FACTSALE;
 CREATE TABLE DWH.FACTSALE(
    SalesOrderID NUMBER,
    SalesOrderDetailID NUMBER,
@@ -84,12 +82,10 @@ CREATE TABLE DWH.FACTSALE(
    DimCustomerKey NUMBER,
    Revenue NUMBER(18,2),
    ProductQuantity NUMBER,
-   ProductRange VARCHAR,
    PRIMARY KEY (SalesOrderID, SalesOrderDetailID)
 );
 
--- Market Segmentation Fact Table (populated by data mining pipeline)
-DROP TABLE IF EXISTS DWH.FACTMARKETSEGMENTATION;
+
 CREATE TABLE DWH.FACTMARKETSEGMENTATION(
     DateKey NUMBER NOT NULL,                    -- Reference to DimTime.DateKey (YYYYMMDD format)
     MarketNameKey VARCHAR NOT NULL,             -- Market identifier (e.g., CountryRegion)
@@ -103,7 +99,5 @@ CREATE TABLE DWH.FACTMARKETSEGMENTATION(
     CreatedAt TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
     PRIMARY KEY (DateKey, MarketNameKey)
 );
-
-
 
 
