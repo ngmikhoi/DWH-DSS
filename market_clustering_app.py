@@ -23,7 +23,7 @@ from market_segmentation_pipeline import MarketSegmentationPipeline
 
 # Page configuration
 st.set_page_config(
-    page_title="Unified Market Segmentation DSS",
+    page_title="DSS for Market Segmentation",
     page_icon="🧬",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -181,8 +181,8 @@ def find_column_case_insensitive(df, name):
 # -----------------------------------------------------------------------------
 
 def render_official_dashboard():
-    st.header("📊 Official Market Segmentation Dashboard")
-    st.markdown("Insights from the latest **LSTM Deep Learning Model** run.")
+    st.header("📊 Dashboard")
+    st.markdown("Provide insights from the latest advanced market segmentation.")
     
     # Add refresh button
     if st.button("🔄 Refresh Data", help="Clear cache and reload latest segmentation"):
@@ -192,7 +192,7 @@ def render_official_dashboard():
     df = load_official_segments()
     
     if df is None or len(df) == 0:
-        st.warning("⚠️ No segmentation data found in FACTMARKETSEGMENTATION. Run the pipeline first!")
+        st.warning("⚠️ No segmentation data found in FactMarketSegmentation. Run the pipeline first!")
         return
 
     # ========================================================================
@@ -251,7 +251,7 @@ def render_official_dashboard():
     # ========================================================================
     # A. SEGMENT OVERVIEW
     # ========================================================================
-    st.subheader("📈 A. Segment Overview")
+    st.subheader("📈 SEGMENT OVERVIEW")
     
     # Key Metrics
     col1, col2, col3, col4 = st.columns(4)
@@ -290,7 +290,7 @@ def render_official_dashboard():
     # ========================================================================
     # B. SEGMENT COMPARISON
     # ========================================================================
-    st.subheader("📊 B. Segment Comparison")
+    st.subheader("📊 SEGMENT COMPARISON")
     
     # ROW 1: SHARES (Donut Charts)
     col_share1, col_share2 = st.columns(2)
@@ -443,7 +443,7 @@ def render_official_dashboard():
     # ========================================================================
     # C. MARKET DETAILS BY SEGMENT (Drill-down)
     # ========================================================================
-    st.subheader("🔍 C. Market Details by Segment")
+    st.subheader("🔍 MARKET DETAILS BY SEGMENT")
     
     # Segment selector for drill-down
     selected_segment_drill = st.selectbox(
@@ -519,8 +519,8 @@ def render_official_dashboard():
 
 
 def render_pipeline_management():
-    st.header("⚙️ Pipeline Management")
-    st.markdown("Trigger and monitor the **LSTM Market Segmentation Pipeline**.")
+    st.header("⚙️ Segmentation Management")
+    st.markdown("Trigger and monitor the **Market Segmentation Pipeline**.")
     
     # Configuration
     col1, col2 = st.columns(2)
@@ -528,12 +528,12 @@ def render_pipeline_management():
         st.subheader("Model Settings")
         st.info("📅 **Window Size:** 5 months (fixed)")
         # st.caption("Each month will be segmented using a 5-month rolling window")
-        n_clusters = st.slider("Target Segments", 2, 10, 5)
-        device = st.radio("Device", ["CPU", "GPU (CUDA)"])
+        n_clusters = st.slider("Target Number of Segments", 2, 10, 5)
+        device = st.radio("Device", ["CPU", "GPU"])
         
     with col2:
         st.subheader("Training Settings")
-        epochs = st.slider("Epochs", 10, 200, 50)
+        epochs = st.slider("Epochs", 10, 100, 50)
         batch_size = st.select_slider("Batch Size", options=[8, 16, 32, 64], value=16)
     
     st.markdown("---")
@@ -543,7 +543,7 @@ def render_pipeline_management():
     This pipeline will:
     - Process **each month independently** with a 5-month rolling window
     - Track **segment movement** over time
-    - Save results for each month to `FACTMARKETSEGMENTATION`
+    - Save results for each month to `FactMarketSegmentation`
     """)
     
     if st.button("🚀 Run Monthly Segmentation", type="primary"):
@@ -647,7 +647,7 @@ def load_playground_data():
         conn.close()
 
 def render_playground():
-    st.header("🧪 Analyst Playground")
+    st.header("🧪 Playground")
     st.markdown("Experiment with **K-Means Clustering** on raw monthly data.")
     
     # Load Data
@@ -752,18 +752,18 @@ def render_playground():
         st.error(f"Clustering failed: {e}")
 
 def main():
-    st.sidebar.title("🧬 Unified DSS")
+    st.sidebar.title("🧬 DSS for Market Segmentation")
     
     mode = st.sidebar.radio(
         "Select Mode:",
-        ["📊 Official Dashboard", "⚙️ Segmentation Management", "🧪 Playground"]
+        ["📊 Official Dashboard", "⚙️ Advanced Segmentation", "🧪 Playground"]
     )
     
     st.sidebar.markdown("---")
     
     if mode == "📊 Official Dashboard":
         render_official_dashboard()
-    elif mode == "⚙️ Segmentation Management":
+    elif mode == "⚙️ Advanced Segmentation":
         render_pipeline_management()
     elif mode == "🧪 Playground":
         render_playground()
