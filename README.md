@@ -4,6 +4,13 @@
 
 This project implements a complete data warehouse and decision support system for analyzing sales data from the AdventureWorks database. The system includes ETL pipelines, dimensional modeling with Slowly Changing Dimensions (SCD), and advanced analytics using a **Hybrid Deep Learning approach** for **Dynamic Monthly Market Segmentation**.
 
+![Central Dashboard](./dashboard.png)
+
+**Central Dashboard**
+
+## Schema Design
+![Data Warehouse Schema for Market Segmentation - CompanyX](./dwh_schema.png)
+
 ## System Architecture
 
 ### Complete Data Flow
